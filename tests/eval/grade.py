@@ -21,7 +21,7 @@ import yaml
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
-from graders import artifacts, audit, citations, recompute, report  # noqa: E402
+from graders import artifacts, audit, citations, executions, recompute, report  # noqa: E402
 import cost  # noqa: E402
 
 # The single definition of "core functionality works" for a run. Kept strict
@@ -62,6 +62,7 @@ def grade_run(run_dir, csv_path=None, answer_key_path=None):
         ("citations", lambda: citations.grade(adir)),
         ("report", lambda: report.grade(adir, key)),
         ("audit", lambda: audit.grade(adir)),
+        ("executions", lambda: executions.grade(run_dir)),
     ]
     if csv_path:
         sections.append(("recompute", lambda: recompute.grade(adir, csv_path)))
@@ -82,7 +83,7 @@ def grade_run(run_dir, csv_path=None, answer_key_path=None):
     run_meta_path = run_dir / "run.json"
     if run_meta_path.is_file():
         meta = json.loads(run_meta_path.read_text(encoding="utf-8"))
-        for k in ("status", "duration_s", "time_to_first_plan_s", "plan_revisions", "tool_errors", "agent_calls", "agent_time_s"):
+        for k in ("status", "duration_s", "time_to_first_plan_s", "plan_revisions", "agent_calls", "agent_span_s"):
             if k in meta:
                 scores[k] = meta[k]
 

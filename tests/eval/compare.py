@@ -36,7 +36,8 @@ METRICS = [
     ("tokens_output", "output tokens", 0, "num"),
     ("duration_s", "duration", -1, "s"),
     ("time_to_first_plan_s", "time to first plan", -1, "s"),
-    ("tool_errors", "tool errors (heuristic)", -1, "num"),
+    ("code_exec_failed", "failed code executions", -1, "num"),
+    ("code_executions", "code executions", -1, "num"),
 ]
 
 

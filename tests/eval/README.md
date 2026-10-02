@@ -46,8 +46,9 @@ marker gets removed with the fix.
   the deployed runtime. Model IDs come from the runtime env, not the local
   checkout, so comparing model configs means one runtime per config.
 - `holdout: true` scenarios refuse to run without `--allow-holdout`.
-- `tool_errors` is a heuristic (tool results starting with "Error" or
-  containing a traceback).
+- The runtime doesn't stream tool calls. `agent_calls` counts `usage_metadata`
+  events (one per agent invocation), and code failures come from the
+  executor's `debug/execution_*.json` (`graders/executions.py`).
 
 ## Comparing tags
 
@@ -82,6 +83,7 @@ Also prints per-agent cost with the model each agent ran on.
 | `citation_coverage` | share of significant numbers (amounts, %, decimals) in the body that carry a citation. Approximate | `graders/report.py` |
 | `core_fact_recall` | core answer-key facts (total revenue, orders, AOV) stated with the right value | `graders/report.py` + `answer_keys/` |
 | `audit_pass`, `audit_block_findings` | the Auditor's own verdict, when the version has an Auditor | `graders/audit.py` |
+| `code_exec_failed`, `code_exec_fail_causes` | agent code that failed in the Fargate sandbox, bucketed by cause (missing file, AttributeError, …) | `graders/executions.py` |
 | `cost_usd`, `cache_hit_rate` | token usage × `pricing.yaml` | `cost.py` |
 
 `core_pass` is defined once, in `PASS_RULES` in `grade.py`.

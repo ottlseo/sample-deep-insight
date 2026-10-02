@@ -7,7 +7,7 @@ runtime's model configuration, and run grade.py.
 
     eval_results/<tag>/<scenario>-<timestamp>-<n>/
       events.jsonl   every streamed event + client_ts
-      run.json       status, timings, plan revisions, agent calls
+      run.json       status, timings, plan revisions, agent calls (from usage events)
       usage.json     token usage by agent, summed from the event stream
       config.json    git SHA, runtime ARN/version, model IDs from the runtime env
       artifacts/     downloaded from s3://<bucket>/deep-insight/fargate_sessions/<session_id>/
@@ -41,7 +41,6 @@ sys.path.insert(0, str(HERE))
 from grade import grade_run, load_scenario  # noqa: E402
 
 SESSIONS_PREFIX = "deep-insight/fargate_sessions/"
-AGENT_TOOLS = ("coder_agent", "validator_agent", "reporter_agent", "tracker_agent", "auditor_agent")
 
 
 def log(msg):
@@ -133,8 +132,7 @@ def run_once(args, scenario_name, scenario, run_dir, clients):
     feedback_queue = list(scenario.get("hitl") or [])
     usage = defaultdict(lambda: {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0, "model_id": None})
     agent_first, agent_last = {}, {}
-    tool_ids = {}
-    tool_errors = 0
+    calls = Counter()
     meta = {"scenario": scenario_name, "tag": args.tag, "status": "incomplete", "plan_revisions": 0}
 
     start = time.monotonic()
@@ -168,19 +166,14 @@ def run_once(args, scenario_name, scenario, run_dir, clients):
                         where = upload_feedback(s3, ev, True, "", args.bucket)
                         log(f"  plan review → approved at {t:.0f}s")
                 elif ev.get("event_type") == "usage_metadata" and agent:
+                    # one usage event per agent invocation (tool calls are not streamed)
+                    calls[agent] += 1
                     u = usage[agent]
                     u["input"] += ev.get("input_tokens", 0) or 0
                     u["output"] += ev.get("output_tokens", 0) or 0
                     u["cache_read"] += ev.get("cache_read_input_tokens", 0) or 0
                     u["cache_write"] += ev.get("cache_write_input_tokens", 0) or 0
                     u["model_id"] = ev.get("model_id") or u["model_id"]
-                elif ev.get("event_type") == "tool_use" and ev.get("tool_id"):
-                    # tool_use is streamed once per input delta; count each call once
-                    tool_ids.setdefault(ev["tool_id"], ev.get("tool_name", "unknown"))
-                elif ev.get("event_type") == "tool_result":
-                    out = str(ev.get("output", ""))
-                    if out.lstrip().lower().startswith("error") or "Traceback (most recent call last)" in out:
-                        tool_errors += 1
                 elif kind == "workflow_complete":
                     meta["status"] = "completed"
                     meta["session_id"] = ev.get("session_id") or None
@@ -193,11 +186,9 @@ def run_once(args, scenario_name, scenario, run_dir, clients):
         meta["error"] = f"{type(e).__name__}: {e}"
 
     meta["duration_s"] = round(time.monotonic() - start, 1)
-    calls = Counter(name for name in tool_ids.values())
-    meta["agent_calls"] = {k: v for k, v in sorted(calls.items()) if any(a in k for a in AGENT_TOOLS)}
-    meta["tool_calls_total"] = sum(calls.values())
-    meta["tool_errors"] = tool_errors
-    meta["agent_time_s"] = {a: round(agent_last[a] - agent_first[a], 1) for a in sorted(agent_first)}
+    meta["agent_calls"] = dict(sorted(calls.items()))
+    # first-to-last event per agent; an agent called several times spans the gaps too
+    meta["agent_span_s"] = {a: round(agent_last[a] - agent_first[a], 1) for a in sorted(agent_first)}
 
     # Artifacts
     sid = meta.get("session_id")

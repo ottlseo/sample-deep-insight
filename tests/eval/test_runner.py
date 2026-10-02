@@ -54,9 +54,6 @@ def events(n_reviews):
     out += [
         {"event_type": "usage_metadata", "agent_name": "planner", "model_id": "global.anthropic.claude-opus-5-5",
          "input_tokens": 1000, "output_tokens": 200, "cache_read_input_tokens": 3000, "cache_write_input_tokens": 0},
-        {"event_type": "tool_use", "agent_name": "supervisor", "tool_name": "coder_agent_custom_interpreter_tool", "tool_id": "t1"},
-        {"event_type": "tool_use", "agent_name": "supervisor", "tool_name": "coder_agent_custom_interpreter_tool", "tool_id": "t1"},
-        {"event_type": "tool_result", "agent_name": "supervisor", "tool_id": "t1", "output": "Error: boom"},
         {"event_type": "usage_metadata", "agent_name": "planner", "model_id": "global.anthropic.claude-opus-5-5",
          "input_tokens": 500, "output_tokens": 100},
         {"type": "workflow_complete", "session_id": "sess-1"},
@@ -81,13 +78,15 @@ def test_auto_approve_and_scoring(tmp_path):
     assert s3.feedback == [("bucket-x", "deep-insight/feedback/req-1.json", s3.feedback[0][2])]
     assert s3.feedback[0][2]["approved"] is True
     assert meta["status"] == "completed" and meta["session_id"] == "sess-1"
-    assert meta["agent_calls"] == {"coder_agent_custom_interpreter_tool": 1}  # streamed twice, counted once
-    assert meta["tool_errors"] == 1
+    assert meta["agent_calls"] == {"planner": 2}  # one usage event per invocation
     usage = json.loads((run_dir / "usage.json").read_text())["by_agent"]["planner"]
     assert usage["input"] == 1500 and usage["cache_read"] == 3000
     assert scores["core_pass"], scores["core_fail_reasons"]
     assert scores["cache_hit_rate"] == 3000 / 4500
     assert "should_not_be_read" not in (run_dir / "events.jsonl").read_text()
+    # debug/ came down with the session and was graded
+    assert scores["code_executions"] == 2 and scores["code_exec_failed"] == 1
+    assert scores["code_exec_fail_causes"] == {"missing_file": 1}
 
 
 def test_scripted_revision_then_approve(tmp_path):

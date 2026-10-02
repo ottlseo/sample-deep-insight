@@ -64,6 +64,10 @@ def make_clean_run(run_dir):
     (a / "audit_findings.json").write_text(json.dumps({"verdict": "pass", "stats": {"type_a": 0, "type_b": 0, "type_c": 0, "type_d": 0}, "findings": [], "audit_metadata": {"retry_count": 0}}), encoding="utf-8")
     refs = [f"[{i}] {c['description']}: {c['value']} | Formula: {c['formula']}" for i, c in enumerate(calcs, 1)]
     write_docx(a / "final_report_with_citations.docx", _body(calcs, top_name), refs)
+    debug = run_dir / "debug"
+    debug.mkdir(exist_ok=True)
+    (debug / "execution_1.json").write_text(json.dumps({"execution_num": 1, "status": "failed", "stderr": "cat: ./data/x.csv: No such file or directory\n", "execution_time_ms": 3}))
+    (debug / "execution_2.json").write_text(json.dumps({"execution_num": 2, "status": "completed", "stdout": "ok", "execution_time_ms": 1200}))
     return run_dir
 
 
