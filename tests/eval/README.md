@@ -29,6 +29,37 @@ uv pip install -p .venv/bin/python -r requirements.txt
 documenting a known bug; it turns into an error once the bug is fixed, so the
 marker gets removed with the fix.
 
+## E2E runs against the deployed runtime
+
+```bash
+.venv/bin/python run_eval.py --scenario moon_market_kr --repeat 5 --tag baseline \
+    --runtime-arn arn:aws:bedrock-agentcore:<region>:<account>:runtime/<id> --region us-west-2
+```
+
+- Plan reviews are answered automatically by writing the S3 feedback file the
+  runtime polls (the same mechanism as `02_invoke_agentcore_runtime_vpc.py`),
+  so there is no human wait and no 300 s timeout. A scenario's `hitl` list
+  sends scripted revision requests first.
+- Token usage is summed from the `usage_metadata` events in the stream, so cost
+  works even on runtime versions that don't save `token_usage.json`.
+- `config.json` records the git SHA and the **runtime's** model IDs, read from
+  the deployed runtime. Model IDs come from the runtime env, not the local
+  checkout, so comparing model configs means one runtime per config.
+- `holdout: true` scenarios refuse to run without `--allow-holdout`.
+- `tool_errors` is a heuristic (tool results starting with "Error" or
+  containing a traceback).
+
+## Comparing tags
+
+```bash
+.venv/bin/python compare.py eval_results/baseline eval_results/candidate --out compare.md
+```
+
+One table per scenario with mean ± std per metric and Δ vs the first tag. A
+metric is flagged ▼/▲ only when the difference exceeds the run-to-run std of
+either side; with n=1 any difference is flagged, so use `--repeat 3` or more.
+Also prints per-agent cost with the model each agent ran on.
+
 ## Grading a run
 
 ```bash

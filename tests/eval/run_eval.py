@@ -1,0 +1,278 @@
+"""Run eval scenarios against the deployed AgentCore Runtime, then grade them.
+
+For each repeat: invoke the runtime, answer plan reviews automatically through
+the S3 feedback file (no human, no 300 s timeout), record every event with a
+client timestamp, download the session's artifacts from S3, snapshot the
+runtime's model configuration, and run grade.py.
+
+    eval_results/<tag>/<scenario>-<timestamp>-<n>/
+      events.jsonl   every streamed event + client_ts
+      run.json       status, timings, plan revisions, agent calls
+      usage.json     token usage by agent, summed from the event stream
+      config.json    git SHA, runtime ARN/version, model IDs from the runtime env
+      artifacts/     downloaded from s3://<bucket>/deep-insight/fargate_sessions/<session_id>/
+      scores.json    from grade.py
+
+Usage:
+    python run_eval.py --scenario moon_market_kr --repeat 5 --tag baseline \\
+        --runtime-arn arn:aws:bedrock-agentcore:... [--region us-west-2]
+
+The invoke and feedback logic mirrors managed-agentcore/02_invoke_agentcore_runtime_vpc.py,
+which can't be imported (it parses CLI args and loads .env at import time).
+"""
+import argparse
+import json
+import os
+import subprocess
+import sys
+import time
+from collections import Counter, defaultdict
+from datetime import datetime, timezone
+from pathlib import Path
+
+import boto3
+from botocore.config import Config
+from dotenv import dotenv_values
+
+HERE = Path(__file__).resolve().parent
+REPO = HERE.parents[1]
+sys.path.insert(0, str(HERE))
+
+from grade import grade_run, load_scenario  # noqa: E402
+
+SESSIONS_PREFIX = "deep-insight/fargate_sessions/"
+AGENT_TOOLS = ("coder_agent", "validator_agent", "reporter_agent", "tracker_agent", "auditor_agent")
+
+
+def log(msg):
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}", flush=True)
+
+
+def parse_sse(line):
+    if not line:
+        return None
+    text = line.decode("utf-8", errors="replace").strip()
+    if text.startswith("data: "):
+        text = text[6:].strip()
+    if not text:
+        return None
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return None
+
+
+def upload_feedback(s3, event, approved, feedback, fallback_bucket):
+    path = event.get("feedback_s3_path", "")
+    if path.startswith("s3://") and path[5:].split("/", 1)[0]:
+        bucket, key = path[5:].split("/", 1)
+    else:
+        bucket, key = fallback_bucket, f"deep-insight/feedback/{event.get('request_id', '')}.json"
+    body = {"approved": approved, "feedback": feedback, "timestamp": datetime.now().isoformat()}
+    s3.put_object(Bucket=bucket, Key=key, Body=json.dumps(body, ensure_ascii=False), ContentType="application/json")
+    return f"s3://{bucket}/{key}"
+
+
+def runtime_config(region, runtime_arn):
+    """The deployed runtime's version and model env, which decide what is being measured."""
+    runtime_id = runtime_arn.rsplit("/", 1)[-1]
+    try:
+        ctl = boto3.client("bedrock-agentcore-control", region_name=region)
+        r = ctl.get_agent_runtime(agentRuntimeId=runtime_id)
+    except Exception as e:
+        return {"error": f"get_agent_runtime failed: {e}"}
+    env = r.get("environmentVariables", {}) or {}
+    return {
+        "runtime_version": r.get("agentRuntimeVersion"),
+        "runtime_updated_at": str(r.get("lastUpdatedAt")),
+        "models": {k: v for k, v in sorted(env.items()) if k.endswith("_MODEL_ID")},
+    }
+
+
+def git_info():
+    def git(*args):
+        return subprocess.run(["git", *args], cwd=REPO, capture_output=True, text=True).stdout.strip()
+    return {"git_sha": git("rev-parse", "HEAD"), "git_branch": git("rev-parse", "--abbrev-ref", "HEAD"), "git_dirty": bool(git("status", "--porcelain", "--untracked-files=no"))}
+
+
+def find_session(s3, bucket, since):
+    """Newest session folder created after `since`, for runtimes that don't report session_id."""
+    newest = None
+    for page in s3.get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=SESSIONS_PREFIX):
+        for obj in page.get("Contents", []):
+            if obj["LastModified"] < since:
+                continue
+            sid = obj["Key"][len(SESSIONS_PREFIX):].split("/", 1)[0]
+            if newest is None or obj["LastModified"] > newest[1]:
+                newest = (sid, obj["LastModified"])
+    return newest[0] if newest else None
+
+
+def download_session(s3, bucket, session_id, dest):
+    """Mirror the session folder; files under its artifacts/ land in dest/artifacts/."""
+    prefix = f"{SESSIONS_PREFIX}{session_id}/"
+    n = 0
+    for page in s3.get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=prefix):
+        for obj in page.get("Contents", []):
+            rel = obj["Key"][len(prefix):]
+            if not rel or rel.endswith("/"):
+                continue
+            target = dest / "s3" / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            s3.download_file(bucket, obj["Key"], str(target))
+            n += 1
+    src = dest / "s3" / "artifacts"
+    if src.is_dir():
+        (dest / "artifacts").symlink_to(Path("s3") / "artifacts", target_is_directory=True)
+    return n
+
+
+def run_once(args, scenario_name, scenario, run_dir, clients):
+    agentcore, s3 = clients
+    run_dir.mkdir(parents=True)
+    feedback_queue = list(scenario.get("hitl") or [])
+    usage = defaultdict(lambda: {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0, "model_id": None})
+    agent_first, agent_last = {}, {}
+    tool_ids = {}
+    tool_errors = 0
+    meta = {"scenario": scenario_name, "tag": args.tag, "status": "incomplete", "plan_revisions": 0}
+
+    start = time.monotonic()
+    started_at = datetime.now(timezone.utc)
+    meta["started_at"] = started_at.isoformat()
+    payload = {"prompt": scenario["query"].strip(), "data_directory": scenario["data_directory"]}
+
+    try:
+        resp = agentcore.invoke_agent_runtime(agentRuntimeArn=args.runtime_arn, qualifier="DEFAULT", payload=json.dumps(payload))
+        with open(run_dir / "events.jsonl", "w", encoding="utf-8") as events:
+            for line in resp["response"].iter_lines(chunk_size=1):
+                ev = parse_sse(line)
+                if ev is None:
+                    continue
+                t = time.monotonic() - start
+                events.write(json.dumps({"client_ts": round(t, 3), **ev}, ensure_ascii=False) + "\n")
+                kind = ev.get("type") or ev.get("event_type")
+                agent = ev.get("agent_name")
+                if agent:
+                    agent_first.setdefault(agent, t)
+                    agent_last[agent] = t
+
+                if kind == "plan_review_request":
+                    meta.setdefault("time_to_first_plan_s", round(t, 1))
+                    if feedback_queue:
+                        fb = feedback_queue.pop(0)
+                        where = upload_feedback(s3, ev, False, fb, args.bucket)
+                        meta["plan_revisions"] += 1
+                        log(f"  plan review → revision requested ({where})")
+                    else:
+                        where = upload_feedback(s3, ev, True, "", args.bucket)
+                        log(f"  plan review → approved at {t:.0f}s")
+                elif ev.get("event_type") == "usage_metadata" and agent:
+                    u = usage[agent]
+                    u["input"] += ev.get("input_tokens", 0) or 0
+                    u["output"] += ev.get("output_tokens", 0) or 0
+                    u["cache_read"] += ev.get("cache_read_input_tokens", 0) or 0
+                    u["cache_write"] += ev.get("cache_write_input_tokens", 0) or 0
+                    u["model_id"] = ev.get("model_id") or u["model_id"]
+                elif ev.get("event_type") == "tool_use" and ev.get("tool_id"):
+                    # tool_use is streamed once per input delta; count each call once
+                    tool_ids.setdefault(ev["tool_id"], ev.get("tool_name", "unknown"))
+                elif ev.get("event_type") == "tool_result":
+                    out = str(ev.get("output", ""))
+                    if out.lstrip().lower().startswith("error") or "Traceback (most recent call last)" in out:
+                        tool_errors += 1
+                elif kind == "workflow_complete":
+                    meta["status"] = "completed"
+                    meta["session_id"] = ev.get("session_id") or None
+                    break
+                if t > args.timeout:
+                    meta["status"] = "timeout"
+                    break
+    except Exception as e:
+        meta["status"] = "error"
+        meta["error"] = f"{type(e).__name__}: {e}"
+
+    meta["duration_s"] = round(time.monotonic() - start, 1)
+    calls = Counter(name for name in tool_ids.values())
+    meta["agent_calls"] = {k: v for k, v in sorted(calls.items()) if any(a in k for a in AGENT_TOOLS)}
+    meta["tool_calls_total"] = sum(calls.values())
+    meta["tool_errors"] = tool_errors
+    meta["agent_time_s"] = {a: round(agent_last[a] - agent_first[a], 1) for a in sorted(agent_first)}
+
+    # Artifacts
+    sid = meta.get("session_id")
+    try:
+        if not sid:
+            sid = find_session(s3, args.bucket, started_at)
+            meta["session_id"] = sid
+            meta["session_id_source"] = "s3_newest_after_start" if sid else None
+        meta["artifact_files"] = download_session(s3, args.bucket, sid, run_dir) if sid else 0
+    except Exception as e:
+        meta["artifact_error"] = f"{type(e).__name__}: {e}"
+
+    (run_dir / "usage.json").write_text(json.dumps({"by_agent": dict(usage)}, indent=2, ensure_ascii=False), encoding="utf-8")
+    (run_dir / "run.json").write_text(json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    result = grade_run(run_dir, scenario["csv"], scenario["answer_key"])
+    (run_dir / "scores.json").write_text(json.dumps(result, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    return meta, result["scores"]
+
+
+def main():
+    env = {**dotenv_values(REPO / "managed-agentcore" / ".env"), **os.environ}
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--scenario", required=True, action="append", help="repeatable")
+    ap.add_argument("--repeat", type=int, default=1)
+    ap.add_argument("--tag", required=True, help="results go to eval_results/<tag>/")
+    ap.add_argument("--runtime-arn", default=env.get("EVAL_RUNTIME_ARN") or env.get("RUNTIME_ARN"))
+    ap.add_argument("--region", default=env.get("AWS_REGION") or "us-west-2")
+    ap.add_argument("--bucket", default=env.get("S3_BUCKET_NAME"), help="defaults to the runtime's S3_BUCKET_NAME")
+    ap.add_argument("--timeout", type=int, default=3600, help="seconds per run")
+    ap.add_argument("--allow-holdout", action="store_true")
+    args = ap.parse_args()
+    if not args.runtime_arn:
+        ap.error("--runtime-arn (or RUNTIME_ARN in managed-agentcore/.env) is required")
+
+    cfg = {**git_info(), "runtime_arn": args.runtime_arn, "region": args.region, **runtime_config(args.region, args.runtime_arn)}
+    if not args.bucket:
+        args.bucket = _runtime_bucket(args.region, args.runtime_arn)
+    if not args.bucket:
+        ap.error("--bucket could not be determined; pass it explicitly")
+    log(f"runtime v{cfg.get('runtime_version')} · git {cfg['git_sha'][:7]}{' (dirty)' if cfg['git_dirty'] else ''} · bucket {args.bucket}")
+    for k, v in cfg.get("models", {}).items():
+        log(f"  {k} = {v}")
+
+    agentcore = boto3.client("bedrock-agentcore", region_name=args.region,
+                             config=Config(connect_timeout=60, read_timeout=args.timeout, retries={"max_attempts": 0}))
+    s3 = boto3.client("s3", region_name=args.region)
+    out_root = HERE / "eval_results" / args.tag
+
+    failures = 0
+    for name in args.scenario:
+        scenario = load_scenario(name)
+        if scenario.get("holdout") and not args.allow_holdout:
+            ap.error(f"{name} is a holdout scenario; pass --allow-holdout to run it")
+        for i in range(1, args.repeat + 1):
+            run_dir = out_root / f"{name}-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{i}"
+            log(f"{name} run {i}/{args.repeat} → {run_dir.relative_to(HERE)}")
+            meta, s = run_once(args, name, scenario, run_dir, (agentcore, s3))
+            (run_dir / "config.json").write_text(json.dumps({**cfg, "bucket": args.bucket, "scenario": name}, indent=2, ensure_ascii=False), encoding="utf-8")
+            failures += not s["core_pass"]
+            cost = f"${s['cost_usd']:.2f}" + ("" if s.get("cost_complete") else "+?") if "cost_usd" in s else "n/a"
+            log(f"  {meta['status']} in {meta['duration_s']:.0f}s · {cost} · core_pass={s['core_pass']}"
+                + (f" ({', '.join(s['core_fail_reasons'])})" if s["core_fail_reasons"] else "")
+                + (f" · {meta['error']}" if meta.get("error") else ""))
+    return 1 if failures else 0
+
+
+def _runtime_bucket(region, runtime_arn):
+    try:
+        ctl = boto3.client("bedrock-agentcore-control", region_name=region)
+        env = ctl.get_agent_runtime(agentRuntimeId=runtime_arn.rsplit("/", 1)[-1]).get("environmentVariables", {})
+        return env.get("S3_BUCKET_NAME")
+    except Exception:
+        return None
+
+
+if __name__ == "__main__":
+    sys.exit(main())
