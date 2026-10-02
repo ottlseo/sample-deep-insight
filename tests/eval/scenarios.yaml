@@ -1,0 +1,73 @@
+# Eval scenarios: dataset × query. `data_directory` is the path inside the
+# runtime container (the runtime uploads it to Fargate), `csv` and
+# `answer_key` are local paths used by the graders (relative to tests/eval/).
+#
+# holdout: true  → don't look at these results while tuning prompts.
+# hitl:          → feedback sent at each plan review, in order. Empty or
+#                  exhausted list = approve.
+
+scenarios:
+  moon_market_kr:
+    data_directory: ./data/moon_market/kr/
+    csv: ../../managed-agentcore/data/moon_market/kr/moon-market-fresh-food-sales.csv
+    answer_key: answer_keys/moon_market_kr.json
+    query: |
+      분석대상은 ‘./data/moon_market/kr/’ 디렉토리 입니다.
+      moon-market-fresh-food-sales.csv 는 분석 파일이고,
+      column_definitions.json은 컬럼에 대한 설명입니다.
+      데이터에서 비즈니스 성장 기회를 발굴해줘:
+      숨겨진 고객 패턴과 세그먼트를 발견하고, 수익 최적화 방안을 제시하며,
+      마케팅과 운영 효율성을 높일 수 있는 개선점을 찾고,
+      다음 달 매출을 크게 늘릴 수 있는 실행 가능한 전략 3가지를 우선순위와 기대 효과를 포함해서 제안해줘.
+      결과는 DOCX로 저장해줘.
+    hitl: []
+
+  # Cheaper run for smoke-testing the harness itself.
+  moon_market_kr_simple:
+    data_directory: ./data/moon_market/kr/
+    csv: ../../managed-agentcore/data/moon_market/kr/moon-market-fresh-food-sales.csv
+    answer_key: answer_keys/moon_market_kr.json
+    query: |
+      분석대상은 ‘./data/moon_market/kr/’ 디렉토리 입니다.
+      moon-market-fresh-food-sales.csv 는 분석 파일이고, column_definitions.json은 컬럼에 대한 설명입니다.
+      총 매출액, 주문 건수, 평균 주문 금액을 계산하고 카테고리별 매출 비중도 함께 보여줘. 결과물을 DOCX로 만들어줘.
+    hitl: []
+
+  # Exercises the plan-revision path (planner_revise) once before approving.
+  moon_market_kr_revision:
+    data_directory: ./data/moon_market/kr/
+    csv: ../../managed-agentcore/data/moon_market/kr/moon-market-fresh-food-sales.csv
+    answer_key: answer_keys/moon_market_kr.json
+    query: |
+      분석대상은 ‘./data/moon_market/kr/’ 디렉토리 입니다.
+      moon-market-fresh-food-sales.csv 는 분석 파일이고, column_definitions.json은 컬럼에 대한 설명입니다.
+      총 매출액, 주문 건수, 평균 주문 금액을 계산하고 카테고리별 매출 비중도 함께 보여줘. 결과물을 DOCX로 만들어줘.
+    hitl:
+      - "연령대별 매출 분석도 계획에 추가해줘."
+
+  # Needs a runtime image built after 2026-02-18 (dataset not in older images).
+  moon_market_en:
+    data_directory: ./data/moon_market/en/
+    csv: ../../managed-agentcore/data/moon_market/en/moon-market-fresh-food-sales.csv
+    answer_key: answer_keys/moon_market_en.json
+    query: |
+      The analysis target is the './data/moon_market/en/' directory.
+      moon-market-fresh-food-sales.csv is the data file and column_definitions.json describes the columns.
+      Find business growth opportunities in the data: discover hidden customer patterns and segments,
+      propose revenue optimization, find improvements for marketing and operational efficiency,
+      and propose 3 actionable strategies to significantly grow next month's revenue, with priority and expected impact.
+      Save the result as DOCX.
+    hitl: []
+
+  # Hold-out. Needs a runtime image built after 2026-02-05.
+  yummy_food:
+    holdout: true
+    data_directory: ./data/yummy_food/
+    csv: ../../managed-agentcore/data/yummy_food/yummy-food-market.csv
+    answer_key: answer_keys/yummy_food.json
+    query: |
+      분석대상은 ‘./data/yummy_food/’ 디렉토리 입니다.
+      yummy-food-market.csv 는 분석 파일이고, column_definitions.json은 컬럼에 대한 설명입니다.
+      매체별·카테고리별 광고 성과(CTR, 전환율, ROAS)를 분석하고, 광고비 효율을 높일 수 있는 예산 재배분 전략 3가지를
+      기대 효과와 함께 제안해줘. 결과는 DOCX로 저장해줘.
+    hitl: []

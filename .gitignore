@@ -49,3 +49,7 @@ build/
 # Customer-referencing PoC research — keep the file locally, never commit
 # (already covered by under_development/, pinned explicitly for safety)
 under_development/260522-data-validation-jinro/citation-marker-misuse.md
+
+# Eval harness outputs (run artifacts, scores, comparisons)
+tests/eval/eval_results/
+.pytest_cache/

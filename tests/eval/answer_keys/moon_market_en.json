@@ -1,0 +1,173 @@
+{
+  "dataset": "moon_market_en",
+  "csv": "managed-agentcore/data/moon_market/en/moon-market-fresh-food-sales.csv",
+  "rows": 836,
+  "facts": [
+    {
+      "id": "total_revenue",
+      "value": 16431923.0,
+      "keywords": [
+        "revenue",
+        "sales"
+      ],
+      "core": true,
+      "rel_tol": 0.005,
+      "note": "SUM(Amount)"
+    },
+    {
+      "id": "order_count",
+      "value": 836.0,
+      "keywords": [
+        "order",
+        "transaction"
+      ],
+      "core": true,
+      "rel_tol": 0,
+      "note": "COUNT(*)"
+    },
+    {
+      "id": "avg_order_value",
+      "value": 19655.410287,
+      "keywords": [
+        "aov",
+        "average",
+        "order value"
+      ],
+      "core": true,
+      "rel_tol": 0.005,
+      "note": "MEAN(Amount)"
+    },
+    {
+      "id": "category_count",
+      "value": 14.0,
+      "keywords": [
+        "categor"
+      ],
+      "core": false,
+      "rel_tol": 0,
+      "note": ""
+    },
+    {
+      "id": "product_count",
+      "value": 175.0,
+      "keywords": [
+        "product"
+      ],
+      "core": false,
+      "rel_tol": 0,
+      "note": ""
+    },
+    {
+      "id": "promo_order_share_pct",
+      "value": 58.61244,
+      "keywords": [
+        "promo"
+      ],
+      "core": false,
+      "rel_tol": 0.01,
+      "note": ""
+    },
+    {
+      "id": "promo_aov_lift_pct",
+      "value": 15.006647,
+      "keywords": [
+        "promo"
+      ],
+      "core": false,
+      "rel_tol": 0.01,
+      "note": ""
+    },
+    {
+      "id": "category_rank1_revenue",
+      "value": 3048395.0,
+      "keywords": [
+        "ready meal/meal kit/salad"
+      ],
+      "core": false,
+      "rel_tol": 0.005,
+      "note": "Ready Meal/Meal Kit/Salad"
+    },
+    {
+      "id": "category_rank1_share_pct",
+      "value": 18.551663,
+      "keywords": [
+        "ready meal/meal kit/salad"
+      ],
+      "core": false,
+      "rel_tol": 0.01,
+      "note": "Ready Meal/Meal Kit/Salad"
+    },
+    {
+      "id": "category_rank2_revenue",
+      "value": 2180136.0,
+      "keywords": [
+        "hair/body/oral care"
+      ],
+      "core": false,
+      "rel_tol": 0.005,
+      "note": "Hair/Body/Oral Care"
+    },
+    {
+      "id": "category_rank2_share_pct",
+      "value": 13.267686,
+      "keywords": [
+        "hair/body/oral care"
+      ],
+      "core": false,
+      "rel_tol": 0.01,
+      "note": "Hair/Body/Oral Care"
+    },
+    {
+      "id": "category_rank3_revenue",
+      "value": 1792471.0,
+      "keywords": [
+        "health supplements"
+      ],
+      "core": false,
+      "rel_tol": 0.005,
+      "note": "Health Supplements"
+    },
+    {
+      "id": "category_rank3_share_pct",
+      "value": 10.908468,
+      "keywords": [
+        "health supplements"
+      ],
+      "core": false,
+      "rel_tol": 0.01,
+      "note": "Health Supplements"
+    },
+    {
+      "id": "gender_F_revenue_share_pct",
+      "value": 52.201961,
+      "keywords": [
+        "female",
+        "women"
+      ],
+      "core": false,
+      "rel_tol": 0.01,
+      "note": ""
+    },
+    {
+      "id": "gender_M_revenue_share_pct",
+      "value": 47.798039,
+      "keywords": [
+        "male",
+        "men"
+      ],
+      "core": false,
+      "rel_tol": 0.01,
+      "note": ""
+    },
+    {
+      "id": "top_age_group_revenue",
+      "value": 3758703.0,
+      "keywords": [
+        "30s"
+      ],
+      "core": false,
+      "rel_tol": 0.005,
+      "note": "30s"
+    }
+  ]
+}

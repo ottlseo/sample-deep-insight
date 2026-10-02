@@ -1,0 +1,53 @@
+# USD per 1M tokens. Matched against the model ID by substring, first match
+# wins, so list more specific families first.
+#
+# verified: false → list price copied from public/Anthropic sources, NOT yet
+# checked against the Bedrock price page for this region. Check and flip to
+# true before quoting costs. Leave a price null if unknown: the token count is
+# then reported as unpriced instead of guessed.
+#
+# cache_write is the 5-minute-TTL write price (1.25× input on Anthropic pricing).
+
+models:
+  - match: claude-opus-5-5
+    input: 4.00
+    output: 20.00
+    cache_read: 0.20
+    cache_write: 5.00      # assumed 1.25× input
+    verified: false
+  - match: claude-sonnet-5-5
+    input: 2.00
+    output: 10.00
+    cache_read: 0.20
+    cache_write: 2.50      # assumed 1.25× input
+    verified: false
+  - match: claude-opus-5
+    input: null
+    output: null
+    cache_read: null
+    cache_write: null
+    verified: false
+  - match: claude-sonnet-5
+    input: null
+    output: null
+    cache_read: null
+    cache_write: null
+    verified: false
+  - match: claude-sonnet-4-5
+    input: 3.00
+    output: 15.00
+    cache_read: 0.30
+    cache_write: 3.75
+    verified: false
+  - match: claude-sonnet-4-2
+    input: 3.00
+    output: 15.00
+    cache_read: 0.30
+    cache_write: 3.75
+    verified: false
+  - match: claude-haiku-4-5
+    input: 1.00
+    output: 5.00
+    cache_read: 0.10
+    cache_write: 1.25
+    verified: false
