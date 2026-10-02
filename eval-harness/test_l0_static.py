@@ -13,7 +13,7 @@ import yaml
 
 import cost
 
-AGENTCORE = Path(__file__).resolve().parents[2] / "managed-agentcore"
+AGENTCORE = Path(__file__).resolve().parents[1] / "managed-agentcore"
 PROMPTS = AGENTCORE / "src" / "prompts"
 
 # Context keys each prompt receives at its call site (src/graph/nodes.py,

@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pandas as pd
 
-REPO = Path(__file__).resolve().parents[3]
+REPO = Path(__file__).resolve().parents[2]
 DATA = REPO / "managed-agentcore" / "data"
 OUT = Path(__file__).resolve().parent
 

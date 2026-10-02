@@ -35,7 +35,7 @@ from botocore.config import Config
 from dotenv import dotenv_values
 
 HERE = Path(__file__).resolve().parent
-REPO = HERE.parents[1]
+REPO = HERE.parent
 sys.path.insert(0, str(HERE))
 
 from grade import grade_run, load_scenario  # noqa: E402

@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pandas as pd
 
-REPO = Path(__file__).resolve().parents[3]
+REPO = Path(__file__).resolve().parents[2]
 CSV = REPO / "managed-agentcore" / "data" / "moon_market" / "kr" / "moon-market-fresh-food-sales.csv"
 
 

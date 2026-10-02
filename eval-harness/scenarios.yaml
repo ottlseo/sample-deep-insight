@@ -1,6 +1,6 @@
 # Eval scenarios: dataset × query. `data_directory` is the path inside the
 # runtime container (the runtime uploads it to Fargate), `csv` and
-# `answer_key` are local paths used by the graders (relative to tests/eval/).
+# `answer_key` are local paths used by the graders (relative to eval-harness/).
 #
 # holdout: true  → don't look at these results while tuning prompts.
 # hitl:          → feedback sent at each plan review, in order. Empty or
@@ -9,7 +9,7 @@
 scenarios:
   moon_market_kr:
     data_directory: ./data/moon_market/kr/
-    csv: ../../managed-agentcore/data/moon_market/kr/moon-market-fresh-food-sales.csv
+    csv: ../managed-agentcore/data/moon_market/kr/moon-market-fresh-food-sales.csv
     answer_key: answer_keys/moon_market_kr.json
     query: |
       분석대상은 ‘./data/moon_market/kr/’ 디렉토리 입니다.
@@ -25,7 +25,7 @@ scenarios:
   # Cheaper run for smoke-testing the harness itself.
   moon_market_kr_simple:
     data_directory: ./data/moon_market/kr/
-    csv: ../../managed-agentcore/data/moon_market/kr/moon-market-fresh-food-sales.csv
+    csv: ../managed-agentcore/data/moon_market/kr/moon-market-fresh-food-sales.csv
     answer_key: answer_keys/moon_market_kr.json
     query: |
       분석대상은 ‘./data/moon_market/kr/’ 디렉토리 입니다.
@@ -36,7 +36,7 @@ scenarios:
   # Exercises the plan-revision path (planner_revise) once before approving.
   moon_market_kr_revision:
     data_directory: ./data/moon_market/kr/
-    csv: ../../managed-agentcore/data/moon_market/kr/moon-market-fresh-food-sales.csv
+    csv: ../managed-agentcore/data/moon_market/kr/moon-market-fresh-food-sales.csv
     answer_key: answer_keys/moon_market_kr.json
     query: |
       분석대상은 ‘./data/moon_market/kr/’ 디렉토리 입니다.
@@ -48,7 +48,7 @@ scenarios:
   # Needs a runtime image built after 2026-02-18 (dataset not in older images).
   moon_market_en:
     data_directory: ./data/moon_market/en/
-    csv: ../../managed-agentcore/data/moon_market/en/moon-market-fresh-food-sales.csv
+    csv: ../managed-agentcore/data/moon_market/en/moon-market-fresh-food-sales.csv
     answer_key: answer_keys/moon_market_en.json
     query: |
       The analysis target is the './data/moon_market/en/' directory.
@@ -63,7 +63,7 @@ scenarios:
   yummy_food:
     holdout: true
     data_directory: ./data/yummy_food/
-    csv: ../../managed-agentcore/data/yummy_food/yummy-food-market.csv
+    csv: ../managed-agentcore/data/yummy_food/yummy-food-market.csv
     answer_key: answer_keys/yummy_food.json
     query: |
       분석대상은 ‘./data/yummy_food/’ 디렉토리 입니다.
