@@ -79,6 +79,10 @@ verdict that flips with the order counts as a tie. Results show in
 .venv/bin/python pairwise.py eval_results/baseline eval_results/my-change
 ```
 
+- **Use enough pairs.** Measured on the baseline (3 runs vs each other): win
+  rate 50%, but one of 3 pairs flipped with the order (position consistency
+  67%). With 3 pairs a single pair moves the win rate by ±33 points, so
+  compare with `--pairs all` (3 × 3 = 9 pairs) or more before acting on it.
 - **Trust, then use.** `judge_sanity.py` feeds the judge a real report and
   variants with known answers (numbers only, strategies removed, a different
   question, empty, a prompt injection) and fails if it scores them wrong. The
