@@ -62,6 +62,34 @@ MODELS = [
 # Families that reject temperature/top_p/top_k with a 400.
 NO_SAMPLING = ("claude-opus-5", "claude-sonnet-5", "claude-opus-4-7", "claude-opus-4-8", "claude-fable")
 
+# Which thinking configs each family accepts (Claude API model docs). First
+# match wins, so specific families come first.
+#   disabled: {"type": "disabled"} accepted
+#   adaptive: {"type": "adaptive"} accepted (older families need budget_tokens instead)
+THINKING_RULES = [
+    ("claude-opus-5-5", {"disabled": False, "adaptive": True}),    # thinking can't be turned off; lower effort instead
+    ("claude-sonnet-5-5", {"disabled": False, "adaptive": True}),  # off is {"type": "between_tools"}
+    ("claude-fable", {"disabled": False, "adaptive": True}),       # thinking always on
+    ("claude-opus-5", {"disabled": True, "adaptive": True}),       # disabled only at effort <= high
+    ("claude-sonnet-5", {"disabled": True, "adaptive": True}),
+    ("claude-sonnet-4-5", {"disabled": True, "adaptive": False}),
+    ("claude-haiku-4-5", {"disabled": True, "adaptive": False}),
+]
+
+# Combinations the runtime gets wrong today, with why it matters. The test is
+# an expected failure for these until get_model() handles them, and turns into
+# an error (strict) once it does, so the marker gets removed with the fix.
+KNOWN_BROKEN = {
+    ("claude-opus-5-5", False): "non-reasoning agents send thinking disabled → 400 on Opus 5.5 (blocks the Opus 5.5 migration, #129)",
+    ("claude-sonnet-5-5", False): "non-reasoning agents send thinking disabled → 400 on Sonnet 5.5; needs between_tools",
+    ("claude-sonnet-4-5", True): "reasoning sends adaptive, which Sonnet 4.5 doesn't take (no agent uses this combo today)",
+    ("claude-haiku-4-5", True): "reasoning sends adaptive, which Haiku 4.5 doesn't take (no agent uses this combo today)",
+}
+
+
+def _rules(model_id):
+    return next((fam, r) for fam, r in THINKING_RULES if fam in model_id)
+
 
 def _model(model_id, reasoning):
     os.environ.setdefault("AWS_REGION", "us-west-2")
@@ -69,26 +97,35 @@ def _model(model_id, reasoning):
     return strands_utils.get_model(llm_type=model_id, enable_reasoning=reasoning, tool_cache=False).config
 
 
-@pytest.mark.parametrize("model_id", MODELS)
-@pytest.mark.parametrize("reasoning", [True, False])
-def test_request_fields(model_id, reasoning):
+def _cases():
+    for model_id in MODELS:
+        for reasoning in (True, False):
+            fam, _ = _rules(model_id)
+            reason = KNOWN_BROKEN.get((fam, reasoning))
+            marks = [pytest.mark.xfail(strict=True, reason=f"known issue: {reason}")] if reason else []
+            yield pytest.param(model_id, reasoning, marks=marks, id=f"{fam}-{'reasoning' if reasoning else 'plain'}")
+
+
+@pytest.mark.parametrize("model_id, reasoning", list(_cases()))
+def test_request_fields_accepted_by_model(model_id, reasoning):
+    """The request get_model() builds must be one the model accepts (no 400)."""
     cfg = _model(model_id, reasoning)
     extra = cfg.get("additional_request_fields", {})
-    if reasoning:
-        assert extra.get("thinking") == {"type": "adaptive"}
-        assert "budget_tokens" not in str(extra), "legacy fixed thinking budget"
-        assert "temperature" not in cfg
-    else:
-        assert extra.get("thinking") == {"type": "disabled"}
-        # thinking off + effort above high is a 400 (Claude Code v2.1.251)
-        effort = (extra.get("output_config") or {}).get("effort")
-        assert effort in (None, "low", "medium", "high")
+    thinking = extra.get("thinking")
+    effort = (extra.get("output_config") or {}).get("effort")
+    _, rules = _rules(model_id)
+    assert "budget_tokens" not in str(extra) or not rules["adaptive"], "fixed thinking budget on a model that only takes adaptive"
+    if thinking == {"type": "disabled"}:
+        assert rules["disabled"], f"{model_id} rejects thinking disabled"
+        assert effort in (None, "low", "medium", "high"), "thinking off + effort above high is a 400"
+    if thinking == {"type": "adaptive"}:
+        assert rules["adaptive"], f"{model_id} doesn't take adaptive thinking"
     if any(f in model_id for f in NO_SAMPLING):
         assert "temperature" not in cfg and "top_p" not in cfg
 
 
 @pytest.mark.xfail(strict=True, reason="known issue: legacy '\\n\\nHuman' stop sequence truncates reports "
-                   "that contain e.g. '\\n\\nHuman Resources'; see tmp/issue-opus55.md item 4")
+                   "that contain e.g. '\\n\\nHuman Resources'; see #129")
 def test_no_legacy_human_stop_sequence():
     cfg = _model(MODELS[0], False)
     assert not any("Human" in s for s in cfg.get("stop_sequences") or [])
