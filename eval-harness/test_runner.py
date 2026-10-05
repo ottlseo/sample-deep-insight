@@ -66,7 +66,7 @@ def run(tmp_path, scenario_name, n_reviews):
     session = make_run.make_clean_run(tmp_path / "session")
     s3 = FakeS3(session, "sess-1")
     agentcore = FakeAgentCore(events(n_reviews))
-    args = types.SimpleNamespace(tag="t", runtime_arn="arn:x", bucket="bucket-x", timeout=60)
+    args = types.SimpleNamespace(tag="t", runtime_arn="arn:x", bucket="bucket-x", timeout=60, judge_ctx=None)
     run_dir = tmp_path / "eval_results" / "t" / "r1"
     meta, scores = run_eval.run_once(args, scenario_name, load_scenario(scenario_name), run_dir, (agentcore, s3))
     return meta, scores, s3, agentcore, run_dir

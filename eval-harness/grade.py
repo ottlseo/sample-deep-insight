@@ -9,9 +9,11 @@ A run folder is what run_eval.py writes (or a manual download from S3):
 
 Usage:
     python grade.py <run_dir> --scenario moon_market_kr
+    python grade.py <run_dir> --scenario moon_market_kr --judge   # + LLM judge (paid)
     python grade.py <run_dir> --csv path/to.csv --answer-key answer_keys/x.json
 """
 import argparse
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -33,6 +35,9 @@ PASS_RULES = {
     "cited_value_match_rate": lambda v: v is None or v >= 0.95,
     "recompute_match_rate": lambda v: v is None or v == 1.0,
     "core_fact_recall": lambda v: v is None or v >= 2 / 3,
+    # Only when the LLM judge ran (grade.py --judge): every requested item must
+    # be at least partly addressed.
+    "judge_requirements_missing": lambda v: v is None or v == 0,
 }
 
 
@@ -51,7 +56,25 @@ def artifacts_dir(run_dir):
     return run_dir / "artifacts" if (run_dir / "artifacts").is_dir() else run_dir
 
 
-def grade_run(run_dir, csv_path=None, answer_key_path=None):
+def run_judge(run_dir, adir, scenario, judge_ctx):
+    """Pointwise LLM judge, cached in judge.json by report hash and judge model."""
+    import judge
+    client, cfg = judge_ctx
+    text = judge.report_text(adir, cfg["max_report_chars"])
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    cache = Path(run_dir) / "judge.json"
+    if cache.is_file():
+        prev = json.loads(cache.read_text(encoding="utf-8"))
+        if prev.get("report_sha256") == digest and prev.get("model") == cfg["model"] and prev.get("effort") == cfg.get("effort"):
+            return prev["metrics"]
+    metrics, verdict, usage = judge.pointwise(client, cfg, scenario["query"], scenario["requirements"], text)
+    metrics["judge_cost_usd"] = judge.judge_cost([usage])
+    cache.write_text(json.dumps({"model": cfg["model"], "effort": cfg.get("effort"), "report_sha256": digest,
+                                 "metrics": metrics, "verdict": verdict, "usage": usage}, indent=2, ensure_ascii=False), encoding="utf-8")
+    return metrics
+
+
+def grade_run(run_dir, csv_path=None, answer_key_path=None, scenario=None, judge_ctx=None):
     run_dir = Path(run_dir)
     adir = artifacts_dir(run_dir)
     key = json.loads(Path(answer_key_path).read_text(encoding="utf-8")) if answer_key_path else None
@@ -73,6 +96,13 @@ def grade_run(run_dir, csv_path=None, answer_key_path=None):
             result = {"details": [f"grader error: {type(e).__name__}: {e}"], f"{name}_grader_error": True}
         details[name] = result.pop("details", [])
         scores.update(result)
+
+    if judge_ctx is not None:
+        try:
+            scores.update(run_judge(run_dir, adir, scenario, judge_ctx))
+        except Exception as e:  # judge failure is reported, never silently scored
+            scores["judge_error"] = f"{type(e).__name__}: {e}"[:300]
+            details["judge"] = [scores["judge_error"]]
 
     usage_path = run_dir / "usage.json"
     if usage_path.is_file():
@@ -101,15 +131,22 @@ def main():
     ap.add_argument("--scenario")
     ap.add_argument("--csv")
     ap.add_argument("--answer-key")
+    ap.add_argument("--judge", action="store_true", help="also run the LLM judge (paid; needs --scenario)")
     ap.add_argument("--quiet", action="store_true")
     args = ap.parse_args()
 
-    csv_path, key_path = args.csv, args.answer_key
+    csv_path, key_path, scenario, judge_ctx = args.csv, args.answer_key, None, None
     if args.scenario:
-        s = load_scenario(args.scenario)
-        csv_path, key_path = csv_path or s["csv"], key_path or s["answer_key"]
+        scenario = load_scenario(args.scenario)
+        csv_path, key_path = csv_path or scenario["csv"], key_path or scenario["answer_key"]
+    if args.judge:
+        if scenario is None:
+            ap.error("--judge needs --scenario (the request and its requirements)")
+        import judge
+        cfg = judge.load_config()
+        judge_ctx = (judge.make_client(cfg), cfg)
 
-    result = grade_run(args.run_dir, csv_path, key_path)
+    result = grade_run(args.run_dir, csv_path, key_path, scenario, judge_ctx)
     out = Path(args.run_dir) / "scores.json"
     out.write_text(json.dumps(result, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     if not args.quiet:

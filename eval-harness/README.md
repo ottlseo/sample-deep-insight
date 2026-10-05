@@ -16,6 +16,7 @@ better":
 | **Runner** `run_eval.py` | Sends a fixed analysis request to the deployed runtime, approves the plan review automatically (no human), and saves the report, citations, code-execution logs and token usage |
 | **Grader** `grade.py` | Scores one run: files produced, numbers correct, cost, time → `scores.json` with PASS / FAIL |
 | **Comparer** `compare.py` | Puts two versions side by side: mean ± std per metric and the difference |
+| **LLM judge** `judge.py`, `pairwise.py` | Grades what numbers can't: did the report answer the request, and is it better than the baseline's? (paid, opt-in) |
 | **Static checks** `pytest` | Seconds, no AWS: prompt templates render, model request fields are valid, and the graders really catch planted defects |
 
 Example `compare.py` output:
@@ -43,6 +44,53 @@ duration                  1920s         1680s           -12% ▲ better
 Each run costs real money (about $4–5 for `moon_market_kr_simple`, more for
 the full query) and takes 15–40 minutes, so start with
 `moon_market_kr_simple` when you only need a smoke test.
+
+## LLM judge: analysis quality
+
+The graders above check that numbers are right. They can't see whether the
+report answers the request: a report that only states total revenue correctly
+passes all of them. The judge closes that gap. It runs on an **OpenAI model in
+Amazon Bedrock** (Converse API, `judge.yaml`), a different family from the
+Claude agents, so it isn't grading its own family's writing.
+
+**Pointwise** (`grade.py --judge`, `run_eval.py --judge`) reads the request,
+the scenario's `requirements` (`scenarios.yaml`) and the report, and returns:
+
+- each requirement as met / partial / missing → `judge_requirement_coverage`,
+  `judge_requirements_missing` (**a missing requirement fails `core_pass`**)
+- 1-5 scores with anchored definitions: `evidence_linkage` (claims tied to
+  findings), `strategy_specificity` (target, steps, quantified effect,
+  priority), `insight_depth` (beyond descriptive stats), `reasoning_soundness`
+  (no overclaiming, data limits stated)
+
+Left out on purpose: numeric accuracy (the graders do it deterministically),
+chart quality (the judge reads text only), length and formatting.
+
+**Pairwise** (`pairwise.py`) is the main A/B signal: judges are better at
+"which of these two" than at absolute scores. Each candidate report is
+compared with a frozen baseline report, twice with the order swapped; a
+verdict that flips with the order counts as a tie. Results show in
+`compare.py`.
+
+```bash
+.venv/bin/python judge_sanity.py eval_results/baseline/<run> --scenario moon_market_kr  # does the judge fail what must fail?
+.venv/bin/python grade.py eval_results/baseline/<run> --scenario moon_market_kr --judge
+.venv/bin/python pairwise.py eval_results/baseline eval_results/baseline   # noise floor, expect ~50%
+.venv/bin/python pairwise.py eval_results/baseline eval_results/my-change
+```
+
+- **Trust, then use.** `judge_sanity.py` feeds the judge a real report and
+  variants with known answers (numbers only, strategies removed, a different
+  question, empty, a prompt injection) and fails if it scores them wrong. The
+  baseline-vs-baseline pairwise run shows how far from 50% noise alone moves
+  the win rate.
+- **Calibrate once with people.** `calibrate.py export` writes a blind label
+  sheet (no judge scores in it); label 10-20 reports, then
+  `calibrate.py score` prints agreement per criterion (exact, ±1, Spearman,
+  bias). Re-check whenever the rubric or judge model changes.
+- Judge results are cached (`judge.json`, `pairwise/`) by report hash and
+  judge model, so re-grading doesn't pay twice. A reply that breaks the schema
+  is recorded as `judge_error`, never as a score.
 
 ## Setup
 

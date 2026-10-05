@@ -204,7 +204,7 @@ def run_once(args, scenario_name, scenario, run_dir, clients):
     (run_dir / "usage.json").write_text(json.dumps({"by_agent": dict(usage)}, indent=2, ensure_ascii=False), encoding="utf-8")
     (run_dir / "run.json").write_text(json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
 
-    result = grade_run(run_dir, scenario["csv"], scenario["answer_key"])
+    result = grade_run(run_dir, scenario["csv"], scenario["answer_key"], scenario, args.judge_ctx)
     (run_dir / "scores.json").write_text(json.dumps(result, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     return meta, result["scores"]
 
@@ -220,7 +220,13 @@ def main():
     ap.add_argument("--bucket", default=env.get("S3_BUCKET_NAME"), help="defaults to the runtime's S3_BUCKET_NAME")
     ap.add_argument("--timeout", type=int, default=3600, help="seconds per run")
     ap.add_argument("--allow-holdout", action="store_true")
+    ap.add_argument("--judge", action="store_true", help="also run the LLM judge on each run (paid, see judge.yaml)")
     args = ap.parse_args()
+    args.judge_ctx = None
+    if args.judge:
+        import judge
+        cfg = judge.load_config()
+        args.judge_ctx = (judge.make_client(cfg), cfg)
     if not args.runtime_arn:
         ap.error("--runtime-arn (or RUNTIME_ARN in managed-agentcore/.env) is required")
 

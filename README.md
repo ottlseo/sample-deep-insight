@@ -121,6 +121,7 @@ Browser-based interface for non-technical users:
 The eval harness turns "did this change make Deep Insight better?" into numbers. It runs fixed analysis requests against the deployed runtime, then scores each run on:
 - ✅ **Completion** — the report, citations and validation files were all produced
 - ✅ **Numeric accuracy** — numbers in the report match the computed values, the source CSV and a pandas answer key
+- ✅ **Analysis quality** — an LLM judge (a different model family on Bedrock) checks each requested item was answered and compares reports with the baseline
 - ✅ **Cost & speed** — dollars per run (Bedrock prices), cache hit rate, duration, failed code executions
 
 ```bash

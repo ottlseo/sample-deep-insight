@@ -1,0 +1,18 @@
+# LLM judge settings (judge.py). The judge runs on OpenAI models in Amazon
+# Bedrock through the Converse API: a different family from the Claude agents
+# it grades, so it isn't scoring its own family's writing.
+#
+# Candidates in us-west-2 (global cross-region inference profiles):
+#   global.openai.gpt-6-astra    $10 / $50 per 1M tokens (verified, Pricing API)
+#   global.openai.gpt-6.1-sol    price not in the Pricing API yet
+#   global.openai.gpt-6-sol      price not in the Pricing API yet
+model: global.openai.gpt-6-astra
+region: us-west-2
+# Sent as outputConfig.effort. Set to null if the model rejects it.
+effort: high
+max_tokens: 32000
+max_retries: 4
+read_timeout: 600
+# Reports are 5-25K chars today. Over this the judge refuses to run instead of
+# truncating what it sees.
+max_report_chars: 200000

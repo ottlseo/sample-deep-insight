@@ -26,11 +26,19 @@ METRICS = [
     ("citation_coverage", "citation coverage", +1, "rate"),
     ("core_fact_recall", "core facts correct", +1, "rate"),
     ("other_facts_found", "other facts correct", +1, "num"),
+    ("judge_requirement_coverage", "judge: requirements met", +1, "rate"),
+    ("judge_requirements_missing", "judge: requirements missing", -1, "num"),
+    ("judge_score_mean", "judge: mean score (1-5)", +1, "num"),
+    ("judge_evidence_linkage", "judge: evidence linkage", +1, "num"),
+    ("judge_strategy_specificity", "judge: strategy specificity", +1, "num"),
+    ("judge_insight_depth", "judge: insight depth", +1, "num"),
+    ("judge_reasoning_soundness", "judge: reasoning soundness", +1, "num"),
     ("audit_pass", "auditor pass", +1, "rate"),
     ("audit_block_findings", "auditor block findings", -1, "num"),
     ("citation_count", "citations", +1, "num"),
     ("chart_count", "charts", 0, "num"),
     ("cost_usd", "cost", -1, "usd"),
+    ("judge_cost_usd", "judge cost (pointwise)", 0, "usd"),
     ("cache_hit_rate", "cache hit rate", +1, "rate"),
     ("tokens_input_total", "input tokens", -1, "num"),
     ("tokens_output", "output tokens", 0, "num"),
@@ -155,6 +163,12 @@ def main():
              "Δ is vs the first tag. ▼/▲ only when the difference exceeds the run-to-run std of either side.", ""]
     for sc in scenarios:
         parts += [table(sc, args.tags, by_scenario[sc]), ""]
+    # Pairwise LLM judge results written by pairwise.py, if any.
+    import pairwise
+    for t in args.tags[1:]:
+        f = Path(t) / f"pairwise_vs_{Path(args.tags[0]).name}.json"
+        if f.is_file():
+            parts += [pairwise.table(json.loads(f.read_text(encoding="utf-8"))), ""]
     text = "\n".join(parts)
     print(text)
     if args.out:
