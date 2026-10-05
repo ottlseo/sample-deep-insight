@@ -8,6 +8,12 @@
 # requirements:  → what the request asks for, one checkable item each. The LLM
 #                  judge marks each met / partial / missing (judge.py); a
 #                  missing one fails core_pass when the judge has run.
+# pass:          → thresholds for core_pass (defaults in grade.py DEFAULT_PASS):
+#                  required_facts    answer-key ids that must appear correctly
+#                  min_other_facts   of the remaining answer-key numbers, how many must
+#                  min_recompute     calculations that must be re-derived from the CSV
+#                  min_cited_checked "number [n]" pairs that must be compared
+#                  Set from real runs: half of the lowest count in a normal run.
 
 scenarios:
   moon_market_kr:
@@ -37,6 +43,12 @@ scenarios:
         text: 각 전략에 우선순위와 그 이유가 있다
       - id: expected_effect
         text: 각 전략에 기대 효과가 있고, 가능하면 수치와 산출 근거가 있다
+    pass:
+      # baseline (3 runs): 99-188 calculations re-derived, 8-12 other answer-key numbers correct
+      required_facts: [total_revenue]
+      min_other_facts: 4
+      min_recompute: 50
+      min_cited_checked: 5
 
   # Cheaper run for smoke-testing the harness itself.
   moon_market_kr_simple:
@@ -57,6 +69,13 @@ scenarios:
         text: 평균 주문 금액을 제시한다
       - id: category_share
         text: 카테고리별 매출 비중을 제시한다
+    pass:
+      # the request names these three numbers, so all are required
+      # smoke run: 8 calculations re-derived
+      required_facts: [total_revenue, order_count, avg_order_value]
+      min_other_facts: 0
+      min_recompute: 4
+      min_cited_checked: 5
 
   # Exercises the plan-revision path (planner_revise) once before approving.
   moon_market_kr_revision:
@@ -80,6 +99,13 @@ scenarios:
         text: 카테고리별 매출 비중을 제시한다
       - id: age_group
         text: 계획 검토에서 추가 요청한 연령대별 매출 분석이 포함되어 있다
+    pass:
+      # the request names these three numbers, so all are required
+      # smoke run: 8 calculations re-derived
+      required_facts: [total_revenue, order_count, avg_order_value]
+      min_other_facts: 0
+      min_recompute: 4
+      min_cited_checked: 5
 
   # Needs a runtime image built after 2026-02-18 (dataset not in older images).
   moon_market_en:
@@ -107,6 +133,12 @@ scenarios:
         text: Each strategy has a priority and a reason for it
       - id: expected_effect
         text: Each strategy has an expected impact, quantified with its basis where possible
+    pass:
+      # not calibrated on real runs yet (dataset not in the deployed image): defaults
+      required_facts: [total_revenue]
+      min_other_facts: 0
+      min_recompute: 10
+      min_cited_checked: 5
 
   # Hold-out. Needs a runtime image built after 2026-02-05.
   yummy_food:
@@ -129,3 +161,10 @@ scenarios:
         text: 광고비 예산 재배분 전략을 3가지 제시한다
       - id: expected_effect
         text: 각 전략에 기대 효과가 있고, 가능하면 수치와 산출 근거가 있다
+
+    pass:
+      # not calibrated on real runs yet (dataset not in the deployed image): defaults
+      required_facts: [total_revenue, total_ad_spend]
+      min_other_facts: 0
+      min_recompute: 10
+      min_cited_checked: 5

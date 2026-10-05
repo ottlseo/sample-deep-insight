@@ -1,9 +1,10 @@
 """Build answer keys (ground-truth facts) for the eval datasets with pandas.
 
 Each fact is a number a reasonable report on the dataset is likely to state.
-`core` facts are expected in any report (total revenue, order count, ...);
-the rest are scored as a bonus. `keywords` must appear in the same paragraph
-for a match, so that a coincidentally equal number elsewhere does not count.
+Which facts a run must contain is set per scenario (`pass:` in
+scenarios.yaml), not here. `keywords` must appear in the same paragraph for a
+match, so that a coincidentally equal number elsewhere does not count; keep
+them specific ("남성", not "남", which also matches "남은").
 
 Usage:
     python answer_keys/build_answer_key.py          # writes answer_keys/*.json
@@ -19,8 +20,8 @@ DATA = REPO / "managed-agentcore" / "data"
 OUT = Path(__file__).resolve().parent
 
 
-def fact(id_, value, keywords, core=False, rel_tol=0.005, note=""):
-    return {"id": id_, "value": round(float(value), 6), "keywords": keywords, "core": core, "rel_tol": rel_tol, "note": note}
+def fact(id_, value, keywords, rel_tol=0.005, note=""):
+    return {"id": id_, "value": round(float(value), 6), "keywords": keywords, "rel_tol": rel_tol, "note": note}
 
 
 def moon_market(lang):
@@ -29,9 +30,9 @@ def moon_market(lang):
     kr = lang == "kr"
     promo = df["promotion-ids"].notna() & (df["promotion-ids"].astype(str).str.strip() != "")
     facts = [
-        fact("total_revenue", df["Amount"].sum(), ["매출"] if kr else ["revenue", "sales"], core=True, note="SUM(Amount)"),
-        fact("order_count", len(df), ["건", "주문", "거래"] if kr else ["order", "transaction"], core=True, rel_tol=0, note="COUNT(*)"),
-        fact("avg_order_value", df["Amount"].mean(), ["객단가", "평균", "주문 금액", "주문금액"] if kr else ["aov", "average", "order value"], core=True, note="MEAN(Amount)"),
+        fact("total_revenue", df["Amount"].sum(), ["매출"] if kr else ["revenue", "sales"], note="SUM(Amount)"),
+        fact("order_count", len(df), ["주문", "거래"] if kr else ["order", "transaction"], rel_tol=0, note="COUNT(*)"),
+        fact("avg_order_value", df["Amount"].mean(), ["객단가", "평균 주문", "주문 금액", "주문금액", "주문당"] if kr else ["aov", "average order", "order value"], note="MEAN(Amount)"),
         fact("category_count", df["Category"].nunique(), ["카테고리"] if kr else ["categor"], rel_tol=0),
         fact("product_count", df["Product"].nunique(), ["상품", "제품"] if kr else ["product"], rel_tol=0),
         fact("promo_order_share_pct", promo.mean() * 100, ["프로모션"] if kr else ["promo"], rel_tol=0.01),
@@ -42,7 +43,7 @@ def moon_market(lang):
         facts.append(fact(f"category_rank{rank}_revenue", value, [name.lower()], note=name))
         facts.append(fact(f"category_rank{rank}_share_pct", value / by_cat.sum() * 100, [name.lower()], rel_tol=0.01, note=name))
     for g, value in df.groupby("Gender")["Amount"].sum().items():
-        facts.append(fact(f"gender_{g}_revenue_share_pct", value / df["Amount"].sum() * 100, ["여성", "여"] if (kr and g == "F") else ["남성", "남"] if kr else ["female", "women"] if g == "F" else ["male", "men"], rel_tol=0.01))
+        facts.append(fact(f"gender_{g}_revenue_share_pct", value / df["Amount"].sum() * 100, ["여성"] if (kr and g == "F") else ["남성"] if kr else ["female", "women"] if g == "F" else ["male", "men"], rel_tol=0.01))
     by_age = df.groupby("Age Group")["Amount"].sum().sort_values(ascending=False)
     facts.append(fact("top_age_group_revenue", by_age.iloc[0], [str(by_age.index[0]).lower()], note=str(by_age.index[0])))
     return {"dataset": f"moon_market_{lang}", "csv": str(csv.relative_to(REPO)), "rows": len(df), "facts": facts}
@@ -53,13 +54,13 @@ def yummy_food():
     df = pd.read_csv(csv, encoding="utf-8-sig")
     rev, cost = df["매출액"].sum(), df["광고비용"].sum()
     facts = [
-        fact("total_revenue", rev, ["매출"], core=True, note="SUM(매출액)"),
-        fact("total_ad_spend", cost, ["광고비", "광고 비용", "비용"], core=True, note="SUM(광고비용)"),
-        fact("overall_roas", rev / cost, ["roas"], core=True, rel_tol=0.01, note="SUM(매출액)/SUM(광고비용); may be printed as ratio or %"),
+        fact("total_revenue", rev, ["매출"], note="SUM(매출액)"),
+        fact("total_ad_spend", cost, ["광고비", "광고 비용"], note="SUM(광고비용)"),
+        fact("overall_roas", rev / cost, ["roas"], rel_tol=0.01, note="SUM(매출액)/SUM(광고비용); may be printed as ratio or %"),
         fact("overall_ctr_pct", df["클릭수"].sum() / df["노출수"].sum() * 100, ["ctr", "클릭률"], rel_tol=0.01),
         fact("overall_cvr_pct", df["전환수"].sum() / df["클릭수"].sum() * 100, ["전환율", "cvr"], rel_tol=0.01),
         fact("total_conversions", df["전환수"].sum(), ["전환"]),
-        fact("row_count", len(df), ["건", "행", "레코드"], rel_tol=0),
+        fact("row_count", len(df), ["레코드", "데이터 건수", "행 수", "건수"], rel_tol=0),
     ]
     by_media = df.groupby("매체")["매출액"].sum().sort_values(ascending=False)
     for rank, (name, value) in enumerate(by_media.head(3).items(), 1):

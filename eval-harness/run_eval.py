@@ -193,10 +193,15 @@ def run_once(args, scenario_name, scenario, run_dir, clients):
     # Artifacts
     sid = meta.get("session_id")
     try:
-        if not sid:
+        if not sid and getattr(args, "allow_session_fallback", False):
+            # Guessing "the newest session" can pick up someone else's run in a
+            # shared bucket, so it is opt-in and flagged.
             sid = find_session(s3, args.bucket, started_at)
             meta["session_id"] = sid
             meta["session_id_source"] = "s3_newest_after_start" if sid else None
+            meta["warning"] = "session_id guessed from the newest S3 session; results may belong to another run"
+        elif not sid and meta["status"] == "completed":
+            meta["status"] = "session_unresolved"  # don't grade a session we can't identify
         meta["artifact_files"] = download_session(s3, args.bucket, sid, run_dir) if sid else 0
     except Exception as e:
         meta["artifact_error"] = f"{type(e).__name__}: {e}"
@@ -220,6 +225,8 @@ def main():
     ap.add_argument("--bucket", default=env.get("S3_BUCKET_NAME"), help="defaults to the runtime's S3_BUCKET_NAME")
     ap.add_argument("--timeout", type=int, default=3600, help="seconds per run")
     ap.add_argument("--allow-holdout", action="store_true")
+    ap.add_argument("--allow-session-fallback", action="store_true",
+                    help="if the runtime reports no session_id, grade the newest S3 session (only for a bucket nobody else uses)")
     ap.add_argument("--judge", action="store_true", help="also run the LLM judge on each run (paid, see judge.yaml)")
     args = ap.parse_args()
     args.judge_ctx = None
@@ -258,7 +265,8 @@ def main():
             cost = f"${s['cost_usd']:.2f}" + ("" if s.get("cost_complete") else "+?") if "cost_usd" in s else "n/a"
             log(f"  {meta['status']} in {meta['duration_s']:.0f}s · {cost} · core_pass={s['core_pass']}"
                 + (f" ({', '.join(s['core_fail_reasons'])})" if s["core_fail_reasons"] else "")
-                + (f" · {meta['error']}" if meta.get("error") else ""))
+                + (f" · {meta['error']}" if meta.get("error") else "")
+                + (f" · ⚠ {meta['warning']}" if meta.get("warning") else ""))
     return 1 if failures else 0
 
 

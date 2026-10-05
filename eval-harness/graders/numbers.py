@@ -37,7 +37,7 @@ def matches(printed, decimals, stored, rel_tol=0.005):
 
     Accepts exact display rounding at the printed precision (19,655 for
     19655.41), a small relative tolerance for scaled units (1.2만 for 12,345),
-    and a stored ratio printed as a percentage (0.878 shown as 87.8).
+    and a stored ratio between 0 and 1 printed as a percentage (0.878 shown as 87.8).
     """
     if stored is None or printed is None:
         return False
@@ -47,7 +47,8 @@ def matches(printed, decimals, stored, rel_tol=0.005):
         return False
     if math.isnan(stored):
         return False
-    for candidate in (stored, stored * 100):
+    # A ratio may be printed as a percentage (0.878 → 87.8); other values may not.
+    for candidate in (stored, stored * 100) if 0 < abs(stored) <= 1 else (stored,):
         if decimals is not None and round(candidate, decimals) == round(printed, decimals):
             return True
         if decimals is not None and abs(candidate - printed) <= 0.5 * 10 ** (-decimals) + 1e-9:

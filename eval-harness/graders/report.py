@@ -138,27 +138,22 @@ def grade(artifacts_dir, answer_key=None):
     return metrics
 
 
+def _keyword_in(keyword, paragraph):
+    """Korean keywords match as substrings; ASCII ones must start a word ("men" ≠ "women")."""
+    k = keyword.lower()
+    if re.fullmatch(r"[a-z0-9 ./-]+", k):
+        return re.search(rf"(?<![a-z0-9]){re.escape(k)}", paragraph) is not None
+    return k in paragraph
+
+
 def _grade_facts(body, answer_key, details):
-    core_total = core_found = other_found = 0
+    found = []
     for fact in answer_key.get("facts", []):
-        keywords = [k.lower() for k in fact.get("keywords", [])]
-        hit = False
         for p in body:
-            if keywords and not any(k in p.lower() for k in keywords):
+            low = p.lower()
+            if fact.get("keywords") and not any(_keyword_in(k, low) for k in fact["keywords"]):
                 continue
             if appears_in(MARKER_RE.sub(" ", p), fact["value"], rel_tol=fact.get("rel_tol", 0.005)):
-                hit = True
+                found.append(fact["id"])
                 break
-        if fact.get("core"):
-            core_total += 1
-            core_found += hit
-            if not hit:
-                details.append(f"core fact not found with correct value: {fact['id']} = {fact['value']}")
-        else:
-            other_found += hit
-    return {
-        "core_fact_recall": core_found / core_total if core_total else None,
-        "core_facts_found": core_found,
-        "core_facts_total": core_total,
-        "other_facts_found": other_found,
-    }
+    return {"facts_found_ids": found, "facts_found": len(found), "facts_total": len(answer_key.get("facts", []))}

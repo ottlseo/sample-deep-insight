@@ -3,29 +3,41 @@
     python compare.py eval_results/baseline eval_results/opus55 [--scenario moon_market_kr] [--out compare.md]
 
 Each tag folder holds run folders with scores.json (from run_eval.py or
-grade.py). Prints one markdown table per scenario: mean ± std per metric,
-delta vs the first tag, and a flag when the change is worse by more than the
-baseline's own run-to-run spread.
+grade.py). Prints one markdown table per scenario:
+
+  pass/fail metrics  rate with a 95% Wilson interval, e.g. 67% [21–94%] (2/3)
+  other metrics      mean ± std (n)
+  Δ                  difference vs the first tag with a 95% bootstrap interval;
+                     ▲/▼ only when that interval excludes 0
+  pass^k             chance that k runs in a row all pass
+
+With about 3 runs per side the intervals are wide and say so: a 2/3 → 3/3
+change is not flagged. Runs under one tag that mix git SHAs, runtime versions
+or model sets are flagged too, since averaging across them compares nothing.
 """
 import argparse
 import json
+import math
+import random
 import statistics
 import sys
 from collections import defaultdict
 from pathlib import Path
 
 # (metric, label, direction, kind) — direction +1 = higher is better, -1 = lower is better.
-# kind: "rate" prints as %, "num" as a plain number, "usd", "s".
+# kind: "binary" pass/fail per run (Wilson interval), "rate" prints as %, "num"
+# as a plain number, "usd", "s".
 METRICS = [
-    ("core_pass", "core pass rate", +1, "rate"),
-    ("all_required_ok", "required artifacts ok", +1, "rate"),
+    ("core_pass", "core pass rate", +1, "binary"),
+    ("all_required_ok", "required artifacts ok", +1, "binary"),
     ("citation_value_match_rate", "citation = metadata", +1, "rate"),
     ("recompute_match_rate", "recompute matches CSV", +1, "rate"),
     ("cited_value_match_rate", "printed value = citation", +1, "rate"),
     ("broken_citation_refs", "broken [n] refs", -1, "num"),
     ("citation_coverage", "citation coverage", +1, "rate"),
-    ("core_fact_recall", "core facts correct", +1, "rate"),
-    ("other_facts_found", "other facts correct", +1, "num"),
+    ("cited_value_checked", "citations compared", +1, "num"),
+    ("recompute_supported", "calculations recomputed", +1, "num"),
+    ("facts_found", "answer-key facts correct", +1, "num"),
     ("judge_requirement_coverage", "judge: requirements met", +1, "rate"),
     ("judge_requirements_missing", "judge: requirements missing", -1, "num"),
     ("judge_score_mean", "judge: mean score (1-5)", +1, "num"),
@@ -33,7 +45,7 @@ METRICS = [
     ("judge_strategy_specificity", "judge: strategy specificity", +1, "num"),
     ("judge_insight_depth", "judge: insight depth", +1, "num"),
     ("judge_reasoning_soundness", "judge: reasoning soundness", +1, "num"),
-    ("audit_pass", "auditor pass", +1, "rate"),
+    ("audit_pass", "auditor pass", +1, "binary"),
     ("audit_block_findings", "auditor block findings", -1, "num"),
     ("citation_count", "citations", +1, "num"),
     ("chart_count", "charts", 0, "num"),
@@ -58,6 +70,8 @@ def load_runs(tag_dir):
         scenario = json.loads(run_meta.read_text())["scenario"] if run_meta.is_file() else scores_path.parent.name.rsplit("-", 3)[0]
         s["_agent_calls"] = json.loads(run_meta.read_text()).get("agent_calls", {}) if run_meta.is_file() else {}
         s["_cost_by_agent"] = data.get("details", {}).get("cost_by_agent", {})
+        cfg_path = scores_path.parent / "config.json"
+        s["_config"] = json.loads(cfg_path.read_text(encoding="utf-8")) if cfg_path.is_file() else {}
         runs.append((scenario, s))
     return runs
 
@@ -76,14 +90,37 @@ def values(runs, metric):
 def summarize(vals):
     if not vals:
         return None
-    return {"mean": statistics.fmean(vals), "std": statistics.stdev(vals) if len(vals) > 1 else 0.0, "n": len(vals)}
+    return {"mean": statistics.fmean(vals), "std": statistics.stdev(vals) if len(vals) > 1 else 0.0, "n": len(vals), "vals": vals}
+
+
+def wilson(k, n, z=1.96):
+    """95% Wilson score interval for k successes out of n."""
+    if n == 0:
+        return None
+    p = k / n
+    centre = (p + z * z / (2 * n)) / (1 + z * z / n)
+    half = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / (1 + z * z / n)
+    return max(0.0, centre - half), min(1.0, centre + half)
+
+
+def bootstrap_diff(a, b, iters=4000, seed=0):
+    """95% percentile interval of mean(b) - mean(a), resampling each side."""
+    rng = random.Random(seed)
+    diffs = sorted(statistics.fmean(rng.choices(b, k=len(b))) - statistics.fmean(rng.choices(a, k=len(a))) for _ in range(iters))
+    return diffs[int(0.025 * iters)], diffs[int(0.975 * iters) - 1]
+
+
+def pass_k(vals):
+    """Unbiased pass^k for k = 1..n: C(successes, k) / C(n, k)."""
+    n, c = len(vals), int(sum(vals))
+    return [math.comb(c, k) / math.comb(n, k) for k in range(1, n + 1)]
 
 
 def fmt(v, kind):
     if v is None:
         return "–"
-    if kind == "rate":
-        return f"{v * 100:.1f}%"
+    if kind in ("rate", "binary"):
+        return f"{v * 100:.0f}%" if kind == "binary" else f"{v * 100:.1f}%"
     if kind == "usd":
         return f"${v:.2f}"
     if kind == "s":
@@ -94,29 +131,60 @@ def fmt(v, kind):
 def fmt_stat(st, kind):
     if st is None:
         return "–"
+    if kind == "binary":
+        k, n = int(sum(st["vals"])), st["n"]
+        lo, hi = wilson(k, n)
+        return f"{fmt(k / n, kind)} [{lo * 100:.0f}–{hi * 100:.0f}%] ({k}/{n})"
     spread = f" ± {fmt(st['std'], kind)}" if st["n"] > 1 else ""
     return f"{fmt(st['mean'], kind)}{spread} (n={st['n']})"
 
 
+def _fmt_d(d, kind, base_mean):
+    if kind in ("rate", "binary"):
+        return f"{d * 100:+.0f}%p"
+    if kind == "usd":
+        return f"{'+' if d >= 0 else '−'}${abs(d):.2f}"
+    if kind == "s":
+        return f"{d:+.0f}s"
+    return f"{d:+.1f}" if abs(d) < 100 else f"{d:+,.0f}"
+
+
 def delta(base, cand, kind, direction):
+    """Difference with its bootstrap interval; flagged only when the interval excludes 0."""
     if base is None or cand is None:
         return "–", ""
     d = cand["mean"] - base["mean"]
-    if kind == "rate":
-        text = f"{d * 100:+.1f}%p"
-    elif base["mean"]:
-        text = f"{d / abs(base['mean']) * 100:+.0f}%"
-    else:
-        text = f"{d:+.2f}"
-    # Worse by more than the baseline's own noise (or any amount if no spread known).
-    noise = max(base["std"], cand["std"])
-    worse = direction != 0 and d * direction < 0 and abs(d) > noise + 1e-9
-    better = direction != 0 and d * direction > 0 and abs(d) > noise + 1e-9
-    return text, "▼ worse" if worse else ("▲ better" if better else "")
+    lo, hi = bootstrap_diff(base["vals"], cand["vals"])
+    text = f"{_fmt_d(d, kind, base['mean'])} [{_fmt_d(lo, kind, base['mean'])}, {_fmt_d(hi, kind, base['mean'])}]"
+    clear = lo > 1e-12 or hi < -1e-12
+    if direction == 0 or not clear:
+        return text, ""
+    return text, "▲ better" if d * direction > 0 else "▼ worse"
+
+
+def config_warnings(tags, runs_by_tag):
+    """Runs under one tag must come from the same code, runtime and models."""
+    out = []
+    for t in tags:
+        seen = defaultdict(int)
+        for s in runs_by_tag[t]:
+            c = s.get("_config") or {}
+            models = ", ".join(f"{k.replace('_MODEL_ID', '').lower()}={v.split('.')[-1]}" for k, v in sorted((c.get("models") or {}).items()))
+            seen[(str(c.get("git_sha", "?"))[:7], str(c.get("runtime_version", "?")), models)] += 1
+        if len(seen) > 1:
+            parts = "; ".join(f"{n}× git {g} / runtime v{r}" for (g, r, m), n in seen.items())
+            out.append(f"> ⚠ `{Path(t).name}` mixes {len(seen)} configurations ({parts}). Split them into separate tags before comparing.")
+    return out
 
 
 def table(scenario, tags, runs_by_tag):
     lines = [f"### {scenario}", ""]
+    lines += config_warnings(tags, runs_by_tag)
+    ns = [len(runs_by_tag[t]) for t in tags]
+    if min(ns) < 5:
+        lines.append(f"> Fewer than 5 runs on a side (n = {', '.join(map(str, ns))}): intervals are wide, and small changes won't be flagged.")
+    if lines[-1] != "":
+        lines.append("")
     header = ["metric"] + [Path(t).name for t in tags] + [f"Δ {Path(t).name}" for t in tags[1:]]
     lines += ["| " + " | ".join(header) + " |", "|" + "---|" * len(header)]
     for metric, label, direction, kind in METRICS:
@@ -128,6 +196,11 @@ def table(scenario, tags, runs_by_tag):
             text, flag = delta(stats[0], s, kind, direction)
             row.append(f"{text} {flag}".strip())
         lines.append("| " + " | ".join(row) + " |")
+        if metric == "core_pass":
+            cells = []
+            for st in stats:
+                cells.append("–" if st is None else " · ".join(f"k={k} {v * 100:.0f}%" for k, v in enumerate(pass_k(st["vals"]), 1)))
+            lines.append("| pass^k (k runs in a row all pass) | " + " | ".join(cells) + " |" + " |" * (len(tags) - 1))
 
     # Per-agent cost: where the money goes and what a model change moved.
     agents = sorted({a for t in tags for s in runs_by_tag[t] for a in s["_cost_by_agent"]})
@@ -160,7 +233,7 @@ def main():
 
     scenarios = args.scenario or sorted(by_scenario)
     parts = [f"## Eval comparison: {' vs '.join(Path(t).name for t in args.tags)}", "",
-             "Δ is vs the first tag. ▼/▲ only when the difference exceeds the run-to-run std of either side.", ""]
+             "Δ is vs the first tag, with a 95% bootstrap interval in brackets. ▲/▼ only when that interval excludes 0.", ""]
     for sc in scenarios:
         parts += [table(sc, args.tags, by_scenario[sc]), ""]
     # Pairwise LLM judge results written by pairwise.py, if any.

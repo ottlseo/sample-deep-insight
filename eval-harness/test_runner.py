@@ -5,6 +5,8 @@ import types
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pytest
+
 import compare
 import run_eval
 from fixtures import make_run
@@ -46,7 +48,7 @@ class FakeS3:
         shutil.copy(self.session_dir / rel, dest)
 
 
-def events(n_reviews):
+def events(n_reviews, session_id="sess-1"):
     out = []
     for i in range(n_reviews):
         out.append({"type": "plan_review_request", "request_id": "req-1", "revision_count": i,
@@ -56,24 +58,25 @@ def events(n_reviews):
          "input_tokens": 1000, "output_tokens": 200, "cache_read_input_tokens": 3000, "cache_write_input_tokens": 0},
         {"event_type": "usage_metadata", "agent_name": "planner", "model_id": "global.anthropic.claude-opus-5-5",
          "input_tokens": 500, "output_tokens": 100},
-        {"type": "workflow_complete", "session_id": "sess-1"},
+        {"type": "workflow_complete", "session_id": session_id},
         {"type": "should_not_be_read"},
     ]
     return out
 
 
-def run(tmp_path, scenario_name, n_reviews):
+def run(tmp_path, scenario_name, n_reviews, reported_session="sess-1", fallback=False):
     session = make_run.make_clean_run(tmp_path / "session")
     s3 = FakeS3(session, "sess-1")
-    agentcore = FakeAgentCore(events(n_reviews))
-    args = types.SimpleNamespace(tag="t", runtime_arn="arn:x", bucket="bucket-x", timeout=60, judge_ctx=None)
+    agentcore = FakeAgentCore(events(n_reviews, reported_session))
+    args = types.SimpleNamespace(tag="t", runtime_arn="arn:x", bucket="bucket-x", timeout=60, judge_ctx=None,
+                                 allow_session_fallback=fallback)
     run_dir = tmp_path / "eval_results" / "t" / "r1"
     meta, scores = run_eval.run_once(args, scenario_name, load_scenario(scenario_name), run_dir, (agentcore, s3))
     return meta, scores, s3, agentcore, run_dir
 
 
 def test_auto_approve_and_scoring(tmp_path):
-    meta, scores, s3, agentcore, run_dir = run(tmp_path, "moon_market_kr", n_reviews=1)
+    meta, scores, s3, agentcore, run_dir = run(tmp_path, "moon_market_kr_simple", n_reviews=1)
     assert agentcore.payload["data_directory"] == "./data/moon_market/kr/"
     assert s3.feedback == [("bucket-x", "deep-insight/feedback/req-1.json", s3.feedback[0][2])]
     assert s3.feedback[0][2]["approved"] is True
@@ -97,16 +100,67 @@ def test_scripted_revision_then_approve(tmp_path):
     assert meta["plan_revisions"] == 1
 
 
-def test_compare_flags_regression(tmp_path):
-    for tag, recall in (("base", [1.0, 1.0, 1.0]), ("cand", [0.0, 0.0, 0.0])):
-        for i, r in enumerate(recall):
-            d = tmp_path / tag / f"moon_market_kr-x-{i}"
-            d.mkdir(parents=True)
-            (d / "run.json").write_text(json.dumps({"scenario": "moon_market_kr"}))
-            (d / "scores.json").write_text(json.dumps({"scores": {"core_fact_recall": r, "cost_usd": 2.0 + i, "core_pass": r == 1.0}}))
-    text = compare.table("moon_market_kr", [str(tmp_path / "base"), str(tmp_path / "cand")],
-                         {str(tmp_path / t): [s for _, s in compare.load_runs(tmp_path / t)] for t in ("base", "cand")})
-    row = next(l for l in text.splitlines() if l.startswith("| core facts correct"))
-    assert "-100.0%p ▼ worse" in row
-    cost_row = next(l for l in text.splitlines() if l.startswith("| cost"))
-    assert "▼" not in cost_row and "▲" not in cost_row  # same cost, no flag
+def test_unreported_session_is_not_guessed(tmp_path):
+    """No session_id from the runtime → fail as session_unresolved (used to grade the newest S3 session)."""
+    meta, scores, *_ = run(tmp_path, "moon_market_kr_simple", n_reviews=1, reported_session="")
+    assert meta["status"] == "session_unresolved" and meta["artifact_files"] == 0
+    assert not scores["core_pass"] and scores["core_fail_reasons"][0] == "status"
+
+
+def test_session_fallback_is_opt_in_and_flagged(tmp_path):
+    meta, scores, *_ = run(tmp_path, "moon_market_kr_simple", n_reviews=1, reported_session="", fallback=True)
+    assert meta["session_id"] == "sess-1" and meta["session_id_source"] == "s3_newest_after_start"
+    assert "another run" in scores["warning"]
+
+
+def _tag(tmp_path, tag, rows, configs=None):
+    for i, scores in enumerate(rows):
+        d = tmp_path / tag / f"moon_market_kr-x-{i}"
+        d.mkdir(parents=True)
+        (d / "run.json").write_text(json.dumps({"scenario": "moon_market_kr"}))
+        (d / "scores.json").write_text(json.dumps({"scores": scores}))
+        if configs:
+            (d / "config.json").write_text(json.dumps(configs[i]))
+    return str(tmp_path / tag)
+
+
+def _table(tmp_path, tags):
+    return compare.table("moon_market_kr", tags, {t: [s for _, s in compare.load_runs(t)] for t in tags})
+
+
+def _row(text, label):
+    return next(l for l in text.splitlines() if l.startswith(f"| {label}"))
+
+
+def test_compare_flags_clear_regression_only(tmp_path):
+    base = _tag(tmp_path, "base", [{"facts_found": 12, "cost_usd": 4.0 + i * 0.1, "core_pass": True} for i in range(5)])
+    cand = _tag(tmp_path, "cand", [{"facts_found": 3, "cost_usd": 4.0 + i * 0.1, "core_pass": True} for i in range(5)])
+    text = _table(tmp_path, [base, cand])
+    assert "▼ worse" in _row(text, "answer-key facts correct")   # 12 → 3 on every run
+    cost = _row(text, "cost")
+    assert "▼" not in cost and "▲" not in cost                   # same costs
+
+
+def test_two_of_three_to_three_of_three_is_not_flagged(tmp_path):
+    """The old rule called 67% → 100% better; with n=3 that can be luck."""
+    base = _tag(tmp_path, "base", [{"core_pass": v} for v in (True, True, False)])
+    cand = _tag(tmp_path, "cand", [{"core_pass": True} for _ in range(3)])
+    text = _table(tmp_path, [base, cand])
+    row = _row(text, "core pass rate")
+    assert "67% [21–94%] (2/3)" in row and "100% [44–100%] (3/3)" in row
+    assert "▲" not in row
+    assert "Fewer than 5 runs" in text
+    assert "k=2 33%" in _row(text, "pass^k")                     # C(2,2)/C(3,2)
+
+
+def test_pass_k_and_wilson():
+    assert compare.pass_k([1, 1, 0]) == pytest.approx([2 / 3, 1 / 3, 0.0])
+    lo, hi = compare.wilson(3, 3)
+    assert round(lo, 2) == 0.44 and hi == 1.0
+
+
+def test_mixed_configs_within_a_tag_are_flagged(tmp_path):
+    cfg = lambda sha: {"git_sha": sha, "runtime_version": "5", "models": {"CODER_MODEL_ID": "global.anthropic.claude-sonnet-5"}}
+    base = _tag(tmp_path, "base", [{"core_pass": True}] * 2, configs=[cfg("aaaaaaa1"), cfg("bbbbbbb2")])
+    text = _table(tmp_path, [base])
+    assert "mixes 2 configurations" in text

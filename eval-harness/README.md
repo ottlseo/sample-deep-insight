@@ -130,6 +130,36 @@ marker gets removed with the fix.
 | `moon_market_en` | English data and query |
 | `yummy_food` | **Hold-out**: don't tune prompts against it; needs `--allow-holdout` |
 
+Each scenario's `pass:` block sets its core_pass thresholds:
+
+| Key | Meaning | `moon_market_kr` | `moon_market_kr_simple` |
+|---|---|---|---|
+| `required_facts` | answer-key numbers that must appear with the correct value | total revenue | total revenue, orders, AOV (the request names them) |
+| `min_other_facts` | of the remaining answer-key numbers, how many must appear correctly | 4 | 0 |
+| `min_recompute` | calculations that must be re-derived from the CSV | 50 | 4 |
+| `min_cited_checked` | "number [n]" pairs that must be compared | 5 | 5 |
+
+The values come from real runs: half of the lowest count in a normal run
+(e.g. 99 calculations re-derived in the smallest baseline run → 50). Why not
+require more specific numbers for the growth request: which answer-key numbers
+appeared correctly in the 3 baseline reports:
+
+| Answer-key number | baseline 1 | baseline 2 | baseline 3 |
+|---|---|---|---|
+| total revenue, order count, AOV | ✓ | ✓ | ✓ |
+| category count, product count | ✓ | ✓ | ✓ |
+| promotion order share | ✓ | ✓ | ✓ |
+| top category revenue and share | ✓ | ✓ | ✓ |
+| 2nd category revenue and share | ✓ | | |
+| revenue share by gender | ✓ | | ✓ |
+| AOV lift with promotion | ✓ | | ✓ |
+| top age group revenue | | ✓ | ✓ |
+| **correct, out of 16** | **13** | **9** | **12** |
+
+Segment numbers depend on what each report chose to analyze, so requiring one
+would fail good reports. "At least N of the rest" lets the report choose but
+still fails one that states few numbers or gets most of them wrong.
+
 ## Runs against the deployed runtime
 
 ```bash
@@ -154,6 +184,10 @@ downloaded session under `s3/` (`artifacts/` links to its artifacts), and
 - The runtime doesn't stream tool calls. `agent_calls` counts `usage_metadata`
   events (one per agent invocation), and code failures come from the
   executor's `debug/execution_*.json`.
+- If the runtime doesn't report a session_id, the run fails as
+  `session_unresolved` instead of grading "the newest session" in the bucket,
+  which could be someone else's. `--allow-session-fallback` restores the guess
+  for a bucket nobody else uses and records a warning.
 
 ## Comparing tags
 
@@ -161,9 +195,19 @@ downloaded session under `s3/` (`artifacts/` links to its artifacts), and
 .venv/bin/python compare.py eval_results/baseline eval_results/candidate --out compare.md
 ```
 
-One table per scenario with mean ± std per metric and Δ vs the first tag. A
-metric is flagged ▼/▲ only when the difference exceeds the run-to-run std of
-either side; with n=1 any difference is flagged, so use `--repeat 3` or more.
+One table per scenario:
+
+- **pass/fail metrics** (core_pass, required artifacts, Auditor pass) show the
+  rate with a 95% Wilson interval: `67% [21–94%] (2/3)`.
+- **other metrics** show mean ± std (n).
+- **Δ** vs the first tag carries a 95% bootstrap interval, and ▲/▼ appears only
+  when that interval excludes 0. With 3 runs a side the intervals are wide on
+  purpose: 2/3 → 3/3 passing is not flagged, because it can be luck.
+- **pass^k**: the chance that k runs in a row all pass, which says more about
+  reliability than the average pass rate.
+- A ⚠ line appears when runs under one tag mix git SHAs, runtime versions or
+  model sets; split them before comparing.
+
 Also prints per-agent cost with the model each agent ran on.
 
 ## Grading a run
@@ -182,16 +226,19 @@ Also prints per-agent cost with the model each agent ran on.
 |---|---|---|
 | `all_required_ok` | report docx, citations.json, calculation_metadata.json, validation_report.txt exist and parse | `graders/artifacts.py` |
 | `citation_value_match_rate` | citations.json value == calculation_metadata value | `graders/citations.py` |
-| `recompute_match_rate` | metadata values re-derived from the raw CSV with pandas (SUM/AVG/COUNT/… only; `recompute_supported` says how many) | `graders/recompute.py` |
-| `cited_value_match_rate` | the number printed right before `[n]` in the report equals citation n | `graders/report.py` |
+| `recompute_match_rate`, `recompute_supported` | metadata values re-derived from the raw CSV with pandas, including `GROUP BY` / `WHERE` / weekday / group max-min / group share. The group is read from the calculation's description; when none is named the value only has to match some group (`recompute_lenient`) | `graders/recompute.py` |
+| `cited_value_match_rate`, `cited_value_checked` | the number printed right before `[n]` in the report equals citation n, and how many pairs were compared | `graders/report.py` |
 | `broken_citation_refs` | `[n]` in the body with no citation n | `graders/report.py` |
 | `citation_coverage` | share of significant numbers (amounts, %, decimals) in the body that carry a citation. Approximate | `graders/report.py` |
-| `core_fact_recall` | core answer-key facts (total revenue, orders, AOV) stated with the right value | `graders/report.py` + `answer_keys/` |
+| `required_facts_missing`, `other_facts_found` | answer-key numbers stated with the right value: the scenario's required ones, and how many of the rest | `graders/report.py` + `answer_keys/` |
 | `audit_pass`, `audit_block_findings` | the Auditor's own verdict, when the version has an Auditor | `graders/audit.py` |
 | `code_exec_failed`, `code_exec_fail_causes` | agent code that failed in the Fargate sandbox, bucketed by cause (missing file, AttributeError, …) | `graders/executions.py` |
 | `cost_usd`, `cache_hit_rate` | token usage × `pricing.yaml` | `cost.py` |
 
-`core_pass` is defined once, in `PASS_RULES` in `grade.py`.
+`core_pass` is defined once, in `fail_reasons()` in `grade.py`. A check that
+produced no result fails instead of passing: a grader error or `judge_error`,
+too few calculations recomputed, too few citations compared. Only checks that
+were deliberately not run (the LLM judge without `--judge`) are skipped.
 
 ### Answer keys
 

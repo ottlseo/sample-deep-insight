@@ -26,19 +26,47 @@ sys.path.insert(0, str(HERE))
 from graders import artifacts, audit, citations, executions, recompute, report  # noqa: E402
 import cost  # noqa: E402
 
-# The single definition of "core functionality works" for a run. Kept strict
-# on integrity (wrong numbers must fail) and lenient on style.
-PASS_RULES = {
-    "all_required_ok": lambda v: v is True,
-    "citations_ok": lambda v: v is True,
-    "broken_citation_refs": lambda v: v == 0,
-    "cited_value_match_rate": lambda v: v is None or v >= 0.95,
-    "recompute_match_rate": lambda v: v is None or v == 1.0,
-    "core_fact_recall": lambda v: v is None or v >= 2 / 3,
-    # Only when the LLM judge ran (grade.py --judge): every requested item must
-    # be at least partly addressed.
-    "judge_requirements_missing": lambda v: v is None or v == 0,
+# Thresholds a scenario can override in scenarios.yaml under `pass:`.
+DEFAULT_PASS = {
+    "min_cited_checked": 5,      # "number [n]" pairs actually compared
+    "min_recompute": 10,         # calculations actually re-derived from the CSV
+    "required_facts": ["total_revenue"],
+    "min_other_facts": 0,        # answer-key numbers besides the required ones
 }
+
+
+def pass_rules(scenario=None):
+    return {**DEFAULT_PASS, **((scenario or {}).get("pass") or {})}
+
+
+def fail_reasons(scores, rules):
+    """The single definition of "core functionality works" for a run.
+
+    A check that produced no result is a failure, not a pass: a grader that
+    crashed, or found nothing it could check, proves nothing. Only checks that
+    were deliberately not run (the LLM judge without --judge) are skipped.
+    """
+    out = []
+    if scores.get("status") not in (None, "completed"):
+        out.append("status")
+    out += sorted(k for k in scores if k.endswith("_grader_error") or k == "judge_error")
+
+    def need(name, ok):
+        if not ok:
+            out.append(name)
+
+    need("all_required_ok", scores.get("all_required_ok") is True)
+    need("citations_ok", scores.get("citations_ok") is True)
+    need("broken_citation_refs", scores.get("broken_citation_refs") == 0)
+    need("cited_value_checked", (scores.get("cited_value_checked") or 0) >= rules["min_cited_checked"])
+    need("cited_value_match_rate", (scores.get("cited_value_match_rate") or 0) >= 0.95)
+    need("recompute_supported", (scores.get("recompute_supported") or 0) >= rules["min_recompute"])
+    need("recompute_match_rate", scores.get("recompute_match_rate") == 1.0)
+    need("required_facts", "facts_found_ids" in scores and not scores.get("required_facts_missing"))
+    need("other_facts_found", (scores.get("other_facts_found") or 0) >= rules["min_other_facts"])
+    if "judge_requirements_missing" in scores:  # only when --judge ran
+        need("judge_requirements_missing", scores["judge_requirements_missing"] == 0)
+    return out
 
 
 def load_scenario(name):
@@ -113,13 +141,16 @@ def grade_run(run_dir, csv_path=None, answer_key_path=None, scenario=None, judge
     run_meta_path = run_dir / "run.json"
     if run_meta_path.is_file():
         meta = json.loads(run_meta_path.read_text(encoding="utf-8"))
-        for k in ("status", "duration_s", "time_to_first_plan_s", "plan_revisions", "agent_calls", "agent_span_s"):
+        for k in ("status", "duration_s", "time_to_first_plan_s", "plan_revisions", "agent_calls", "agent_span_s", "warning", "session_id_source"):
             if k in meta:
                 scores[k] = meta[k]
 
-    failed = [k for k, rule in PASS_RULES.items() if not rule(scores.get(k))]
-    if scores.get("status") not in (None, "completed"):
-        failed.insert(0, "status")
+    rules = pass_rules(scenario)
+    found = scores.get("facts_found_ids")
+    if found is not None:
+        scores["required_facts_missing"] = [f for f in rules["required_facts"] if f not in found]
+        scores["other_facts_found"] = sum(f not in rules["required_facts"] for f in found)
+    failed = fail_reasons(scores, rules)
     scores["core_pass"] = not failed
     scores["core_fail_reasons"] = failed
     return {"scores": scores, "details": details}

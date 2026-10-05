@@ -9,7 +9,6 @@
       "keywords": [
         "매출"
       ],
-      "core": true,
       "rel_tol": 0.005,
       "note": "SUM(매출액)"
     },
@@ -18,10 +17,8 @@
       "value": 10000000000.0,
       "keywords": [
         "광고비",
-        "광고 비용",
-        "비용"
+        "광고 비용"
       ],
-      "core": true,
       "rel_tol": 0.005,
       "note": "SUM(광고비용)"
     },
@@ -31,7 +28,6 @@
       "keywords": [
         "roas"
       ],
-      "core": true,
       "rel_tol": 0.01,
       "note": "SUM(매출액)/SUM(광고비용); may be printed as ratio or %"
     },
@@ -42,7 +38,6 @@
         "ctr",
         "클릭률"
       ],
-      "core": false,
       "rel_tol": 0.01,
       "note": ""
     },
@@ -53,7 +48,6 @@
         "전환율",
         "cvr"
       ],
-      "core": false,
       "rel_tol": 0.01,
       "note": ""
     },
@@ -63,7 +57,6 @@
       "keywords": [
         "전환"
       ],
-      "core": false,
       "rel_tol": 0.005,
       "note": ""
     },
@@ -71,11 +64,11 @@
       "id": "row_count",
       "value": 720.0,
       "keywords": [
-        "건",
-        "행",
-        "레코드"
+        "레코드",
+        "데이터 건수",
+        "행 수",
+        "건수"
       ],
-      "core": false,
       "rel_tol": 0,
       "note": ""
     },
@@ -85,7 +78,6 @@
       "keywords": [
         "쿠빵"
       ],
-      "core": false,
       "rel_tol": 0.005,
       "note": "쿠빵"
     },
@@ -95,7 +87,6 @@
       "keywords": [
         "네이바"
       ],
-      "core": false,
       "rel_tol": 0.005,
       "note": "네이바"
     },
@@ -105,7 +96,6 @@
       "keywords": [
         "컬삼"
       ],
-      "core": false,
       "rel_tol": 0.005,
       "note": "컬삼"
     },
@@ -115,7 +105,6 @@
       "keywords": [
         "건강식품"
       ],
-      "core": false,
       "rel_tol": 0.005,
       "note": "건강식품"
     }

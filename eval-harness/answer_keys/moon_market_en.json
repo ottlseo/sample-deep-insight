@@ -10,7 +10,6 @@
         "revenue",
         "sales"
       ],
-      "core": true,
       "rel_tol": 0.005,
       "note": "SUM(Amount)"
     },
@@ -21,7 +20,6 @@
         "order",
         "transaction"
       ],
-      "core": true,
       "rel_tol": 0,
       "note": "COUNT(*)"
     },
@@ -30,10 +28,9 @@
       "value": 19655.410287,
       "keywords": [
         "aov",
-        "average",
+        "average order",
         "order value"
       ],
-      "core": true,
       "rel_tol": 0.005,
       "note": "MEAN(Amount)"
     },
@@ -43,7 +40,6 @@
       "keywords": [
         "categor"
       ],
-      "core": false,
       "rel_tol": 0,
       "note": ""
     },
@@ -53,7 +49,6 @@
       "keywords": [
         "product"
       ],
-      "core": false,
       "rel_tol": 0,
       "note": ""
     },
@@ -63,7 +58,6 @@
       "keywords": [
         "promo"
       ],
-      "core": false,
       "rel_tol": 0.01,
       "note": ""
     },
@@ -73,7 +67,6 @@
       "keywords": [
         "promo"
       ],
-      "core": false,
       "rel_tol": 0.01,
       "note": ""
     },
@@ -83,7 +76,6 @@
       "keywords": [
         "ready meal/meal kit/salad"
       ],
-      "core": false,
       "rel_tol": 0.005,
       "note": "Ready Meal/Meal Kit/Salad"
     },
@@ -93,7 +85,6 @@
       "keywords": [
         "ready meal/meal kit/salad"
       ],
-      "core": false,
       "rel_tol": 0.01,
       "note": "Ready Meal/Meal Kit/Salad"
     },
@@ -103,7 +94,6 @@
       "keywords": [
         "hair/body/oral care"
       ],
-      "core": false,
       "rel_tol": 0.005,
       "note": "Hair/Body/Oral Care"
     },
@@ -113,7 +103,6 @@
       "keywords": [
         "hair/body/oral care"
       ],
-      "core": false,
       "rel_tol": 0.01,
       "note": "Hair/Body/Oral Care"
     },
@@ -123,7 +112,6 @@
       "keywords": [
         "health supplements"
       ],
-      "core": false,
       "rel_tol": 0.005,
       "note": "Health Supplements"
     },
@@ -133,7 +121,6 @@
       "keywords": [
         "health supplements"
       ],
-      "core": false,
       "rel_tol": 0.01,
       "note": "Health Supplements"
     },
@@ -144,7 +131,6 @@
         "female",
         "women"
       ],
-      "core": false,
       "rel_tol": 0.01,
       "note": ""
     },
@@ -155,7 +141,6 @@
         "male",
         "men"
       ],
-      "core": false,
       "rel_tol": 0.01,
       "note": ""
     },
@@ -165,7 +150,6 @@
       "keywords": [
         "30s"
       ],
-      "core": false,
       "rel_tol": 0.005,
       "note": "30s"
     }
