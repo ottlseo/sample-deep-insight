@@ -6,6 +6,7 @@ pytest>=8.0
 # >= 1.43: Converse outputConfig (structured output + effort) used by the judge
 boto3==1.43.108
 pydantic>=2.0
+requests>=2.31            # langfuse_sync.py (Langfuse public REST API)
 python-dotenv==1.2.2
 
 # L0 checks import managed-agentcore/src, so pin the same SDK versions as the runtime

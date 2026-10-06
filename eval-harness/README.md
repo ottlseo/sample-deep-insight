@@ -164,6 +164,31 @@ verdict that flips with the order counts as a tie. Results show in
   judge model, so re-grading doesn't pay twice. A reply that breaks the schema
   is recorded as `judge_error`, never as a score.
 
+## Langfuse: browse, compare and label in a UI
+
+`langfuse_sync.py` publishes results to a Langfuse project (self-hosted works;
+uses the public REST API):
+
+| Eval harness | Langfuse |
+|---|---|
+| scenario (request, requirements, answer key, pass thresholds) | item in dataset `deep-insight-eval` |
+| tag (`baseline`, `my-change`) | dataset run of the same name |
+| one run | trace: input = request, output = the report text, metadata = git SHA, runtime version, model IDs |
+| per-agent tokens, cost, time span | one generation per agent |
+| `scores.json`, `judge.json` | trace scores; judge scores carry the judge's justification as the comment |
+| pairwise win rate | score on the candidate's dataset run |
+| human labels | annotation queue `deep-insight-calibration`, same score configs as the judge |
+
+```bash
+# eval-harness/langfuse.env (git-ignored): LANGFUSE_HOST, LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY
+.venv/bin/python langfuse_sync.py eval_results/baseline eval_results/my-change --dry-run   # count only
+.venv/bin/python langfuse_sync.py eval_results/baseline eval_results/my-change --queue
+.venv/bin/python calibrate.py langfuse     # judge vs labels entered in the annotation queue
+```
+
+IDs come from each run's path, so syncing again updates in place. When
+labeling in the queue, hide the API (judge) scores so labels stay blind.
+
 ## Setup
 
 ```bash

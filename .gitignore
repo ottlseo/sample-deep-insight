@@ -53,3 +53,6 @@ under_development/260522-data-validation-jinro/citation-marker-misuse.md
 # Eval harness outputs (run artifacts, scores, comparisons)
 eval-harness/eval_results/
 .pytest_cache/
+
+# Langfuse credentials for eval-harness/langfuse_sync.py
+eval-harness/langfuse.env
