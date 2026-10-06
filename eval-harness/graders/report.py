@@ -4,13 +4,14 @@ Checks, in order of how much they say about correctness:
   * every [n] in the body resolves to a citation, and the number printed right
     before it equals that citation's value
   * share of significant numbers in the body that carry a citation
-  * core facts from the dataset's answer key appear with the correct value
+Whether the report's numbers match the dataset's answer key is judged by
+factcheck.py: it has to read periods and filters, which rules can't.
 """
 import re
 from pathlib import Path
 
 from .citations import load_citations
-from .numbers import appears_in, matches, parse_numbers
+from .numbers import matches, parse_numbers
 
 MARKER_RE = re.compile(r"\[(\d+)\]")
 # Heading that starts the reference list; everything after it is not "body".
@@ -66,7 +67,7 @@ def _is_significant(text, start, end, decimals):
     return "," in raw or decimals or after[:1] == "%" or before in ("₩", "$") or after[:1] in ("원", "%") or any(s in raw for s in "만억KMB")
 
 
-def grade(artifacts_dir, answer_key=None):
+def grade(artifacts_dir):
     path = Path(artifacts_dir) / "final_report_with_citations.docx"
     if not path.is_file():
         return {"report_ok": False, "details": ["final_report_with_citations.docx missing"]}
@@ -130,30 +131,6 @@ def grade(artifacts_dir, answer_key=None):
         "significant_numbers": significant,
         "citation_coverage": cited / significant if significant else None,
     }
-
-    # --- answer key ----------------------------------------------------------
-    if answer_key:
-        metrics.update(_grade_facts(body, answer_key, details))
     metrics["details"] = details
     return metrics
 
-
-def _keyword_in(keyword, paragraph):
-    """Korean keywords match as substrings; ASCII ones must start a word ("men" ≠ "women")."""
-    k = keyword.lower()
-    if re.fullmatch(r"[a-z0-9 ./-]+", k):
-        return re.search(rf"(?<![a-z0-9]){re.escape(k)}", paragraph) is not None
-    return k in paragraph
-
-
-def _grade_facts(body, answer_key, details):
-    found = []
-    for fact in answer_key.get("facts", []):
-        for p in body:
-            low = p.lower()
-            if fact.get("keywords") and not any(_keyword_in(k, low) for k in fact["keywords"]):
-                continue
-            if appears_in(MARKER_RE.sub(" ", p), fact["value"], rel_tol=fact.get("rel_tol", 0.005)):
-                found.append(fact["id"])
-                break
-    return {"facts_found_ids": found, "facts_found": len(found), "facts_total": len(answer_key.get("facts", []))}

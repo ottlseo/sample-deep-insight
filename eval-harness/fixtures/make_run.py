@@ -38,6 +38,26 @@ def _body(calcs, top_name):
     ]
 
 
+def statement(fact_id, quote, stated, number, unit, subject="", relation="none", scope="same", stated_scope="unstated"):
+    """One fact-check extraction entry, as the model would return it."""
+    return {"fact_id": fact_id, "quote": quote, "stated": stated, "number": number, "unit": unit, "subject": subject,
+            "relation": relation, "stated_scope": stated_scope, "scope": scope, "scope_reason": ""}
+
+
+def clean_extraction(drop=()):
+    """The fact-check extraction a correct model returns for make_clean_run's report."""
+    calcs, top = _calcs()
+    v = {c["id"]: c["value"] for c in calcs}
+    out = [
+        statement("order_count", f"총 {v['calc_002']:,.0f}건", f"{v['calc_002']:,.0f}건", v["calc_002"], "count"),
+        statement("total_revenue", f"총 매출은 {v['calc_001']:,.0f}원", f"{v['calc_001']:,.0f}원", v["calc_001"], "KRW"),
+        statement("avg_order_value", f"평균 주문 금액(객단가)은 {v['calc_003']:,.0f}원", f"{v['calc_003']:,.0f}원", round(v["calc_003"]), "KRW"),
+        statement("category_rank1_revenue", f"{top} 카테고리 매출이 {v['calc_004']:,.0f}원", f"{v['calc_004']:,.0f}원", v["calc_004"], "KRW"),
+        statement("product_count", f"판매된 상품 수는 {v['calc_005']:,.0f}개", f"{v['calc_005']:,.0f}개", v["calc_005"], "count"),
+    ]
+    return {"statements": [s for s in out if s["fact_id"] not in drop]}
+
+
 def write_docx(path, body, refs):
     import docx
     doc = docx.Document()

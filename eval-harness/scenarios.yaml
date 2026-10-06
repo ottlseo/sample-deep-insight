@@ -9,8 +9,8 @@
 #                  judge marks each met / partial / missing (judge.py); a
 #                  missing one fails core_pass when the judge has run.
 # pass:          → thresholds for core_pass (defaults in grade.py DEFAULT_PASS):
-#                  required_facts    answer-key ids that must appear correctly
-#                  min_other_facts   of the remaining answer-key numbers, how many must
+#                  required_facts    answer-key ids the fact check (factcheck.py) must find stated correctly
+#                  min_other_facts   of the remaining answer-key facts, how many must
 #                  min_recompute     calculations that must be re-derived from the CSV
 #                  min_cited_checked "number [n]" pairs that must be compared
 #                  Set from real runs: half of the lowest count in a normal run.
@@ -45,6 +45,7 @@ scenarios:
         text: 각 전략에 기대 효과가 있고, 가능하면 수치와 산출 근거가 있다
     pass:
       # baseline (3 runs): 99-188 calculations re-derived, 8-12 other answer-key numbers correct
+      # (keyword matcher, 16-fact key); re-set min_other_facts from baseline runs re-graded with the fact check
       required_facts: [total_revenue]
       min_other_facts: 4
       min_recompute: 50

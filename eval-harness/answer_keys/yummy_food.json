@@ -5,108 +5,146 @@
   "facts": [
     {
       "id": "total_revenue",
+      "kind": "value",
+      "description": "Total revenue: SUM(매출액)",
+      "scope": {
+        "period": "full period of the file",
+        "filter": "none"
+      },
+      "unit": "KRW",
       "value": 8695000415.0,
-      "keywords": [
-        "매출"
-      ],
       "rel_tol": 0.005,
-      "note": "SUM(매출액)"
+      "note": ""
     },
     {
       "id": "total_ad_spend",
+      "kind": "value",
+      "description": "Total ad spend: SUM(광고비용)",
+      "scope": {
+        "period": "full period of the file",
+        "filter": "none"
+      },
+      "unit": "KRW",
       "value": 10000000000.0,
-      "keywords": [
-        "광고비",
-        "광고 비용"
-      ],
       "rel_tol": 0.005,
-      "note": "SUM(광고비용)"
+      "note": ""
     },
     {
       "id": "overall_roas",
+      "kind": "value",
+      "description": "Overall ROAS: SUM(매출액) / SUM(광고비용); may be printed as a ratio or a percent",
+      "scope": {
+        "period": "full period of the file",
+        "filter": "none"
+      },
+      "unit": "ratio",
       "value": 0.8695,
-      "keywords": [
-        "roas"
-      ],
       "rel_tol": 0.01,
-      "note": "SUM(매출액)/SUM(광고비용); may be printed as ratio or %"
+      "note": ""
     },
     {
       "id": "overall_ctr_pct",
+      "kind": "value",
+      "description": "Overall CTR: SUM(클릭수) / SUM(노출수)",
+      "scope": {
+        "period": "full period of the file",
+        "filter": "none"
+      },
+      "unit": "percent",
       "value": 3.519886,
-      "keywords": [
-        "ctr",
-        "클릭률"
-      ],
       "rel_tol": 0.01,
       "note": ""
     },
     {
       "id": "overall_cvr_pct",
+      "kind": "value",
+      "description": "Overall conversion rate: SUM(전환수) / SUM(클릭수)",
+      "scope": {
+        "period": "full period of the file",
+        "filter": "none"
+      },
+      "unit": "percent",
       "value": 8.215299,
-      "keywords": [
-        "전환율",
-        "cvr"
-      ],
       "rel_tol": 0.01,
       "note": ""
     },
     {
       "id": "total_conversions",
+      "kind": "value",
+      "description": "Total conversions: SUM(전환수)",
+      "scope": {
+        "period": "full period of the file",
+        "filter": "none"
+      },
+      "unit": "count",
       "value": 35204368.0,
-      "keywords": [
-        "전환"
-      ],
       "rel_tol": 0.005,
       "note": ""
     },
     {
       "id": "row_count",
+      "kind": "value",
+      "description": "Number of rows (records) in the file",
+      "scope": {
+        "period": "full period of the file",
+        "filter": "none"
+      },
+      "unit": "count",
       "value": 720.0,
-      "keywords": [
-        "레코드",
-        "데이터 건수",
-        "행 수",
-        "건수"
-      ],
       "rel_tol": 0,
       "note": ""
     },
     {
       "id": "media_rank1_revenue",
+      "kind": "value",
+      "description": "Revenue of media channel 쿠빵",
+      "scope": {
+        "period": "full period of the file",
+        "filter": "none"
+      },
+      "unit": "KRW",
       "value": 3399999060.0,
-      "keywords": [
-        "쿠빵"
-      ],
       "rel_tol": 0.005,
-      "note": "쿠빵"
+      "note": "rank 1 by revenue"
     },
     {
       "id": "media_rank2_revenue",
+      "kind": "value",
+      "description": "Revenue of media channel 네이바",
+      "scope": {
+        "period": "full period of the file",
+        "filter": "none"
+      },
+      "unit": "KRW",
       "value": 2125000760.0,
-      "keywords": [
-        "네이바"
-      ],
       "rel_tol": 0.005,
-      "note": "네이바"
+      "note": "rank 2 by revenue"
     },
     {
       "id": "media_rank3_revenue",
+      "kind": "value",
+      "description": "Revenue of media channel 컬삼",
+      "scope": {
+        "period": "full period of the file",
+        "filter": "none"
+      },
+      "unit": "KRW",
       "value": 1699994806.0,
-      "keywords": [
-        "컬삼"
-      ],
       "rel_tol": 0.005,
-      "note": "컬삼"
+      "note": "rank 3 by revenue"
     },
     {
       "id": "category_rank1_revenue",
+      "kind": "value",
+      "description": "Revenue of category 건강식품",
+      "scope": {
+        "period": "full period of the file",
+        "filter": "none"
+      },
+      "unit": "KRW",
       "value": 4285004048.0,
-      "keywords": [
-        "건강식품"
-      ],
       "rel_tol": 0.005,
-      "note": "건강식품"
+      "note": "the top category by revenue"
     }
   ]
 }

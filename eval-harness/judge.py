@@ -154,14 +154,14 @@ def _requirements_block(requirements):
     return "\n".join(f"- {r['id']}: {r['text']}" for r in requirements)
 
 
-def _call(client, cfg, prompt, schema):
+def _call(client, cfg, prompt, schema, system=SYSTEM):
     output_config = {"textFormat": {"type": "json_schema", "structure": {"jsonSchema": {
         "name": schema.__name__, "schema": json.dumps(strict_schema(schema))}}}}
     if cfg.get("effort"):
         output_config["effort"] = cfg["effort"]
     resp = client.converse(
         modelId=cfg["model"],
-        system=[{"text": SYSTEM}],
+        system=[{"text": system}],
         messages=[{"role": "user", "content": [{"text": prompt}]}],
         inferenceConfig={"maxTokens": cfg.get("max_tokens", 32000)},
         outputConfig=output_config,

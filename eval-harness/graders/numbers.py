@@ -61,7 +61,3 @@ def matches(printed, decimals, stored, rel_tol=0.005):
             return True
     return False
 
-
-def appears_in(text, stored, rel_tol=0.005):
-    """Whether any number in text displays the stored value."""
-    return any(matches(v, d, stored, rel_tol) for v, _, _, d in parse_numbers(text))

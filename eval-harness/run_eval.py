@@ -38,7 +38,7 @@ HERE = Path(__file__).resolve().parent
 REPO = HERE.parent
 sys.path.insert(0, str(HERE))
 
-from grade import grade_run, load_scenario  # noqa: E402
+from grade import grade_run, load_scenario, model_ctx  # noqa: E402
 
 SESSIONS_PREFIX = "deep-insight/fargate_sessions/"
 
@@ -209,7 +209,7 @@ def run_once(args, scenario_name, scenario, run_dir, clients):
     (run_dir / "usage.json").write_text(json.dumps({"by_agent": dict(usage)}, indent=2, ensure_ascii=False), encoding="utf-8")
     (run_dir / "run.json").write_text(json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
 
-    result = grade_run(run_dir, scenario["csv"], scenario["answer_key"], scenario, args.judge_ctx)
+    result = grade_run(run_dir, scenario["csv"], scenario["answer_key"], scenario, args.judge_ctx, getattr(args, "factcheck_ctx", None))
     (run_dir / "scores.json").write_text(json.dumps(result, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     return meta, result["scores"]
 
@@ -228,12 +228,10 @@ def main():
     ap.add_argument("--allow-session-fallback", action="store_true",
                     help="if the runtime reports no session_id, grade the newest S3 session (only for a bucket nobody else uses)")
     ap.add_argument("--judge", action="store_true", help="also run the LLM judge on each run (paid, see judge.yaml)")
+    ap.add_argument("--no-factcheck", action="store_true", help="skip the answer-key fact check (it calls a model; on by default)")
     args = ap.parse_args()
-    args.judge_ctx = None
-    if args.judge:
-        import judge
-        cfg = judge.load_config()
-        args.judge_ctx = (judge.make_client(cfg), cfg)
+    args.judge_ctx = model_ctx() if args.judge else None
+    args.factcheck_ctx = None if args.no_factcheck else (args.judge_ctx or model_ctx())
     if not args.runtime_arn:
         ap.error("--runtime-arn (or RUNTIME_ARN in managed-agentcore/.env) is required")
 

@@ -11,6 +11,10 @@ Usage:
     python grade.py <run_dir> --scenario moon_market_kr
     python grade.py <run_dir> --scenario moon_market_kr --judge   # + LLM judge (paid)
     python grade.py <run_dir> --csv path/to.csv --answer-key answer_keys/x.json
+    python grade.py <run_dir> --scenario moon_market_kr --no-factcheck   # no model calls
+
+The answer-key fact check (factcheck.py) calls a model on Bedrock and runs by
+default; its result is cached in <run_dir>/factcheck.json.
 """
 import argparse
 import hashlib
@@ -44,12 +48,13 @@ def fail_reasons(scores, rules):
 
     A check that produced no result is a failure, not a pass: a grader that
     crashed, or found nothing it could check, proves nothing. Only checks that
-    were deliberately not run (the LLM judge without --judge) are skipped.
+    were deliberately not run (the LLM judge without --judge, the fact check
+    with --no-factcheck) are skipped.
     """
     out = []
     if scores.get("status") not in (None, "completed"):
         out.append("status")
-    out += sorted(k for k in scores if k.endswith("_grader_error") or k == "judge_error")
+    out += sorted(k for k in scores if k.endswith("_grader_error") or k in ("judge_error", "factcheck_error"))
 
     def need(name, ok):
         if not ok:
@@ -62,8 +67,11 @@ def fail_reasons(scores, rules):
     need("cited_value_match_rate", (scores.get("cited_value_match_rate") or 0) >= 0.95)
     need("recompute_supported", (scores.get("recompute_supported") or 0) >= rules["min_recompute"])
     need("recompute_match_rate", scores.get("recompute_match_rate") == 1.0)
-    need("required_facts", "facts_found_ids" in scores and not scores.get("required_facts_missing"))
-    need("other_facts_found", (scores.get("other_facts_found") or 0) >= rules["min_other_facts"])
+    if not scores.get("factcheck_skipped"):
+        need("required_facts", "facts_found_ids" in scores and not scores.get("required_facts_missing"))
+        need("other_facts_found", (scores.get("other_facts_found") or 0) >= rules["min_other_facts"])
+        # only statements both code and the adjudicating model call wrong; disagreements are needs_review
+        need("factcheck_wrong_confirmed", scores.get("factcheck_wrong_confirmed", 0) == 0)
     if "judge_requirements_missing" in scores:  # only when --judge ran
         need("judge_requirements_missing", scores["judge_requirements_missing"] == 0)
     return out
@@ -102,16 +110,38 @@ def run_judge(run_dir, adir, scenario, judge_ctx):
     return metrics
 
 
-def grade_run(run_dir, csv_path=None, answer_key_path=None, scenario=None, judge_ctx=None):
+def run_factcheck(run_dir, adir, answer_key_path, factcheck_ctx):
+    """Answer-key fact check, cached in factcheck.json by report hash and evaluator version."""
+    import factcheck
+    import judge
+    from graders.report import read_docx
+    client, cfg = factcheck_ctx
+    paragraphs = read_docx(Path(adir) / "final_report_with_citations.docx")
+    key_bytes = Path(answer_key_path).read_bytes()
+    digest = hashlib.sha256("\n".join(paragraphs).encode("utf-8")).hexdigest()
+    ver = factcheck.version(cfg, hashlib.sha256(key_bytes).hexdigest())
+    cache = Path(run_dir) / "factcheck.json"
+    if cache.is_file():
+        prev = json.loads(cache.read_text(encoding="utf-8"))
+        if prev.get("report_sha256") == digest and prev.get("version") == ver:
+            return prev["metrics"], factcheck.describe(prev["records"])
+    metrics, records, usages = factcheck.check(client, cfg, json.loads(key_bytes), paragraphs)
+    metrics["factcheck_cost_usd"] = judge.judge_cost(usages)
+    metrics["factcheck_version"] = ver
+    cache.write_text(json.dumps({"version": ver, "report_sha256": digest, "metrics": metrics, "records": records, "usage": usages},
+                                indent=2, ensure_ascii=False), encoding="utf-8")
+    return metrics, factcheck.describe(records)
+
+
+def grade_run(run_dir, csv_path=None, answer_key_path=None, scenario=None, judge_ctx=None, factcheck_ctx=None):
     run_dir = Path(run_dir)
     adir = artifacts_dir(run_dir)
-    key = json.loads(Path(answer_key_path).read_text(encoding="utf-8")) if answer_key_path else None
 
     scores, details = {}, {}
     sections = [
         ("artifacts", lambda: artifacts.grade(adir)),
         ("citations", lambda: citations.grade(adir)),
-        ("report", lambda: report.grade(adir, key)),
+        ("report", lambda: report.grade(adir)),
         ("audit", lambda: audit.grade(adir)),
         ("executions", lambda: executions.grade(run_dir)),
     ]
@@ -124,6 +154,16 @@ def grade_run(run_dir, csv_path=None, answer_key_path=None, scenario=None, judge
             result = {"details": [f"grader error: {type(e).__name__}: {e}"], f"{name}_grader_error": True}
         details[name] = result.pop("details", [])
         scores.update(result)
+
+    if answer_key_path and factcheck_ctx is None:
+        scores["factcheck_skipped"] = True
+    elif answer_key_path:
+        try:
+            metrics, details["factcheck"] = run_factcheck(run_dir, adir, answer_key_path, factcheck_ctx)
+            scores.update(metrics)
+        except Exception as e:  # a failed check is reported, never silently passed
+            scores["factcheck_error"] = f"{type(e).__name__}: {e}"[:300]
+            details["factcheck"] = [scores["factcheck_error"]]
 
     if judge_ctx is not None:
         try:
@@ -156,6 +196,13 @@ def grade_run(run_dir, csv_path=None, answer_key_path=None, scenario=None, judge
     return {"scores": scores, "details": details}
 
 
+def model_ctx():
+    """(Bedrock client, judge.yaml settings), shared by the judge and the fact check."""
+    import judge
+    cfg = judge.load_config()
+    return judge.make_client(cfg), cfg
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("run_dir")
@@ -163,21 +210,22 @@ def main():
     ap.add_argument("--csv")
     ap.add_argument("--answer-key")
     ap.add_argument("--judge", action="store_true", help="also run the LLM judge (paid; needs --scenario)")
+    ap.add_argument("--no-factcheck", action="store_true", help="skip the answer-key fact check (no model calls; fact rules are skipped)")
     ap.add_argument("--quiet", action="store_true")
     args = ap.parse_args()
 
-    csv_path, key_path, scenario, judge_ctx = args.csv, args.answer_key, None, None
+    csv_path, key_path, scenario, judge_ctx, factcheck_ctx = args.csv, args.answer_key, None, None, None
     if args.scenario:
         scenario = load_scenario(args.scenario)
         csv_path, key_path = csv_path or scenario["csv"], key_path or scenario["answer_key"]
     if args.judge:
         if scenario is None:
             ap.error("--judge needs --scenario (the request and its requirements)")
-        import judge
-        cfg = judge.load_config()
-        judge_ctx = (judge.make_client(cfg), cfg)
+        judge_ctx = model_ctx()
+    if key_path and not args.no_factcheck:
+        factcheck_ctx = judge_ctx or model_ctx()
 
-    result = grade_run(args.run_dir, csv_path, key_path, scenario, judge_ctx)
+    result = grade_run(args.run_dir, csv_path, key_path, scenario, judge_ctx, factcheck_ctx)
     out = Path(args.run_dir) / "scores.json"
     out.write_text(json.dumps(result, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     if not args.quiet:

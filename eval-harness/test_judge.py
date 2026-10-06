@@ -9,23 +9,8 @@ import calibrate
 import judge
 import pairwise
 from fixtures import make_run
+from fixtures.fake_bedrock import CFG, FakeConverse
 from grade import grade_run, load_scenario
-
-CFG = {"model": "global.openai.gpt-6-astra", "region": "us-west-2", "effort": "high", "max_tokens": 1000, "max_report_chars": 200000}
-
-
-class FakeConverse:
-    """Returns queued replies (dicts → JSON text) and records each request."""
-    def __init__(self, replies, stop="end_turn"):
-        self.replies, self.stop, self.requests = list(replies), stop, []
-
-    def converse(self, **kw):
-        self.requests.append(kw)
-        r = self.replies.pop(0)
-        text = r if isinstance(r, str) else json.dumps(r)
-        return {"output": {"message": {"content": [{"text": text}]}}, "stopReason": self.stop,
-                "usage": {"inputTokens": 10_000, "outputTokens": 2_000}}
-
 
 def pointwise_reply(reqs, status="met", score=4, skip=()):
     return {"requirements": [{"requirement_id": r["id"], "status": status, "evidence": "..."} for r in reqs if r["id"] not in skip],

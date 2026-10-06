@@ -164,3 +164,13 @@ def test_mixed_configs_within_a_tag_are_flagged(tmp_path):
     base = _tag(tmp_path, "base", [{"core_pass": True}] * 2, configs=[cfg("aaaaaaa1"), cfg("bbbbbbb2")])
     text = _table(tmp_path, [base])
     assert "mixes 2 configurations" in text
+
+
+def test_compare_warns_when_evaluators_differ(tmp_path):
+    base = _tag(tmp_path, "base", [{"facts_found": 12, "factcheck_version": "factcheck-v1|m|key=a"} for _ in range(2)])
+    cand = _tag(tmp_path, "cand", [{"facts_found": 12, "factcheck_version": "factcheck-v2|m|key=a"} for _ in range(2)])
+    text = compare.table("moon_market_kr", [base, cand], {t: [s for _, s in compare.load_runs(t)] for t in (base, cand)})
+    assert "2 evaluator versions" in text and "Re-grade" in text
+    same = _tag(tmp_path, "same", [{"facts_found": 12, "factcheck_version": "factcheck-v1|m|key=a"} for _ in range(2)])
+    text = compare.table("moon_market_kr", [base, same], {t: [s for _, s in compare.load_runs(t)] for t in (base, same)})
+    assert "evaluator versions" not in text

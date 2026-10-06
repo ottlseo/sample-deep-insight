@@ -4,6 +4,7 @@ import json
 import pytest
 
 from fixtures import make_run
+from fixtures.fake_bedrock import CFG, FakeConverse
 from grade import fail_reasons, grade_run, load_scenario, pass_rules
 from graders import recompute
 from graders.numbers import matches, parse_numbers
@@ -21,8 +22,10 @@ def clean(tmp_path):
     return make_run.make_clean_run(tmp_path / "run")
 
 
-def grade(run_dir, scenario):
-    return grade_run(run_dir, scenario["csv"], scenario["answer_key"], scenario)["scores"]
+def grade(run_dir, scenario, extraction=None):
+    """Grade with a fake fact-check model that reads the clean report correctly."""
+    fc = (FakeConverse([extraction or make_run.clean_extraction()]), CFG)
+    return grade_run(run_dir, scenario["csv"], scenario["answer_key"], scenario, factcheck_ctx=fc)["scores"]
 
 
 def test_clean_run_passes(clean, scenario):
@@ -84,19 +87,23 @@ def test_no_numbers_before_markers_fails(clean, scenario):
 
 
 def test_required_fact_missing_fails(clean, scenario):
-    """The simple request names three numbers; dropping AOV fails it (2 of 3 used to pass)."""
+    """The simple request names three numbers; dropping AOV fails it (2 of 3 used to pass).
+
+    The fake model still quotes the AOV sentence; the quote isn't in the report
+    any more, so it is discarded as unverified instead of counting."""
     calcs, top = make_run._calcs()
     body = [l for l in make_run._body(calcs, top) if "객단가" not in l]
     make_run.write_docx(clean / "artifacts" / "final_report_with_citations.docx", body, [])
     s = grade(clean, scenario)
     assert s["required_facts_missing"] == ["avg_order_value"]
+    assert s["factcheck_unverified_quotes"] == 1
     assert "required_facts" in s["core_fail_reasons"]
 
 
 def test_min_other_facts(clean):
     growth = load_scenario("moon_market_kr")
     rules = pass_rules(growth)
-    s = grade_run(clean, growth["csv"], growth["answer_key"], growth)["scores"]
+    s = grade(clean, growth)
     assert rules["min_other_facts"] == 4
     assert ("other_facts_found" in s["core_fail_reasons"]) == (s["other_facts_found"] < 4)
 
@@ -196,10 +203,3 @@ def test_parse_numbers(text, value):
 ])
 def test_matches(printed, decimals, stored, ok):
     assert matches(printed, decimals, stored) is ok
-
-
-def test_keywords_match_word_starts():
-    from graders.report import _keyword_in
-    assert _keyword_in("men", "revenue from men was 47.8%")
-    assert not _keyword_in("men", "revenue from women was 52.2%")
-    assert _keyword_in("남성", "남성 고객 매출 비중")

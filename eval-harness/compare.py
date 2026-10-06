@@ -38,6 +38,9 @@ METRICS = [
     ("cited_value_checked", "citations compared", +1, "num"),
     ("recompute_supported", "calculations recomputed", +1, "num"),
     ("facts_found", "answer-key facts correct", +1, "num"),
+    ("factcheck_wrong_confirmed", "answer-key facts stated wrong", -1, "num"),
+    ("factcheck_needs_review", "fact check: needs review", -1, "num"),
+    ("factcheck_unit_issues", "fact check: unit issues (%p for %)", -1, "num"),
     ("judge_requirement_coverage", "judge: requirements met", +1, "rate"),
     ("judge_requirements_missing", "judge: requirements missing", -1, "num"),
     ("judge_score_mean", "judge: mean score (1-5)", +1, "num"),
@@ -51,6 +54,7 @@ METRICS = [
     ("chart_count", "charts", 0, "num"),
     ("cost_usd", "cost", -1, "usd"),
     ("judge_cost_usd", "judge cost (pointwise)", 0, "usd"),
+    ("factcheck_cost_usd", "fact check cost", 0, "usd"),
     ("cache_hit_rate", "cache hit rate", +1, "rate"),
     ("tokens_input_total", "input tokens", -1, "num"),
     ("tokens_output", "output tokens", 0, "num"),
@@ -177,9 +181,18 @@ def config_warnings(tags, runs_by_tag):
     return out
 
 
+def evaluator_warnings(tags, runs_by_tag):
+    """Every run must be fact-checked by the same evaluator, or a delta may be the evaluator's."""
+    versions = {s.get("factcheck_version") for t in tags for s in runs_by_tag[t] if s.get("factcheck_version")}
+    if len(versions) < 2:
+        return []
+    return [f"> ⚠ Fact check ran with {len(versions)} evaluator versions ({'; '.join(sorted(versions))}). "
+            "Re-grade every tag with the current one (grade.py on the saved runs) before reading the fact rows."]
+
+
 def table(scenario, tags, runs_by_tag):
     lines = [f"### {scenario}", ""]
-    lines += config_warnings(tags, runs_by_tag)
+    lines += config_warnings(tags, runs_by_tag) + evaluator_warnings(tags, runs_by_tag)
     ns = [len(runs_by_tag[t]) for t in tags]
     if min(ns) < 5:
         lines.append(f"> Fewer than 5 runs on a side (n = {', '.join(map(str, ns))}): intervals are wide, and small changes won't be flagged.")
