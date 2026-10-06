@@ -129,7 +129,7 @@ def test_trace_has_report_scores_and_agents(tag_dir):
     assert scores["core_pass"]["value"] == 1 and scores["core_pass"]["dataType"] == "BOOLEAN"
     assert scores["recompute_supported"]["value"] == 5.0
     assert scores["insight_depth"]["comment"] == "why insight_depth" and scores["insight_depth"]["configId"] == "cfg-insight_depth"
-    assert scores["req:total_revenue"]["value"] == "met" and scores["req:total_revenue"]["dataType"] == "CATEGORICAL"
+    assert scores["req.total_revenue"]["value"] == "met" and scores["req.total_revenue"]["dataType"] == "CATEGORICAL"
 
 
 def test_ids_are_stable_so_resync_updates_in_place(tag_dir):
@@ -158,7 +158,7 @@ def test_configs_created_once(tag_dir):
     sync(tag, fake)
     n = len(fake.configs)
     sync(tag, fake)
-    assert len(fake.configs) == n and "req:segments" in fake.configs and "reasoning_soundness" in fake.configs
+    assert len(fake.configs) == n and "req.segments" in fake.configs and "reasoning_soundness" in fake.configs
 
 
 def test_ingestion_errors_raise(tag_dir):
@@ -183,7 +183,7 @@ def test_calibrate_reads_langfuse_annotations(tag_dir, capsys):
     (tag.parent / "langfuse_sync.json").write_text(json.dumps({trace_id: {"run_dir": str(run.relative_to(tag.parent.parent))}}))
     fake.annotations = [
         {"traceId": trace_id, "name": "insight_depth", "value": 3},
-        {"traceId": trace_id, "name": "req:total_revenue", "value": 1, "stringValue": "met"},
+        {"traceId": trace_id, "name": "req.total_revenue", "value": 1, "stringValue": "met"},
     ]
     calibrate.score_langfuse(lf)
     out = capsys.readouterr().out

@@ -153,7 +153,7 @@ def score_langfuse(lf=None):
         if verdict is None:
             missing += 1
             continue
-        h_req = {r["name"][4:]: str(r.get("stringValue") or r.get("value")).lower() for r in rows if r["name"].startswith("req:")}
+        h_req = {r["name"][4:]: str(r.get("stringValue") or r.get("value")).lower() for r in rows if r["name"].startswith("req.")}
         h_crit = {r["name"]: r["value"] for r in rows if r["name"] in judge.CRITERIA}
         human.append((*verdict, h_req, h_crit))
     report_agreement(human, labeled, missing)

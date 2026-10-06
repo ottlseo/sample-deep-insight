@@ -109,7 +109,7 @@ def _event(kind, body, event_id):
 
 def ensure_score_configs(lf, requirement_ids):
     have = {c["name"]: c["id"] for c in lf.pages("/api/public/score-configs") if not c.get("isArchived")}
-    wanted = [{"name": f"req:{r}", "dataType": "CATEGORICAL", "categories": REQ_CATEGORIES,
+    wanted = [{"name": f"req.{r}", "dataType": "CATEGORICAL", "categories": REQ_CATEGORIES,
                "description": f"Requirement '{r}' addressed by the report: met / partial / missing"} for r in requirement_ids]
     wanted += [{"name": c, "dataType": "NUMERIC", "minValue": 1, "maxValue": 5,
                 "description": f"Rubric criterion {c} (1/3/5 anchors in eval-harness/judge.py)"} for c in CRITERIA]
@@ -206,7 +206,7 @@ def run_events(run_dir, tag, configs):
         for c in v.get("criteria", []):
             score(c["criterion"], float(c["score"]), "NUMERIC", comment=c.get("justification"), config_id=configs.get(c["criterion"]))
         for r in v.get("requirements", []):
-            name = f"req:{r['requirement_id']}"
+            name = f"req.{r['requirement_id']}"
             score(name, r["status"], "CATEGORICAL", comment=r.get("evidence"), config_id=configs.get(name))
     return events, trace_id, scenario, config
 
@@ -244,7 +244,7 @@ def pairwise_scores(lf, tag_dir):
         for scenario, s in summary["scenarios"].items():
             if not s.get("pairs"):
                 continue
-            name = f"pairwise_win_rate_vs_{summary['baseline']}:{scenario}"
+            name = f"pairwise_win_rate_vs_{summary['baseline']}.{scenario}"
             comment = (f"{s['pairs']} pairs · W/T/L/both_bad {s['wins']}/{s['ties']}/{s['losses']}/{s['both_bad']} · "
                        f"position-consistent {s['position_consistency']:.0%} · judge {summary['judge_model']}")
             events.append(_event("score-create", {"id": sid("score", run["id"], name), "datasetRunId": run["id"], "name": name,
@@ -258,7 +258,7 @@ def pairwise_scores(lf, tag_dir):
 def queue_traces(lf, trace_ids, configs):
     queue = next((q for q in lf.pages("/api/public/annotation-queues") if q["name"] == QUEUE), None)
     if queue is None:
-        ids = [configs[c] for c in CRITERIA] + [v for k, v in configs.items() if k.startswith("req:")]
+        ids = [configs[c] for c in CRITERIA] + [v for k, v in configs.items() if k.startswith("req.")]
         queue = lf.post("/api/public/annotation-queues", {"name": QUEUE, "scoreConfigIds": ids,
                         "description": "Label reports blind to the judge (hide API scores), then run calibrate.py langfuse"})
     queued = {i["objectId"] for i in lf.pages(f"/api/public/annotation-queues/{queue['id']}/items")}
@@ -312,7 +312,7 @@ def main():
             events += ev
             linked.append((trace_id, scenario))
             configs_seen.add((str(config.get("git_sha", ""))[:7], str(config.get("runtime_version"))))
-            manifest[trace_id] = {"run_dir": str(r.relative_to(HERE)), "tag": tag, "scenario": scenario}
+            manifest[trace_id] = {"run_dir": str(r.resolve().relative_to(HERE)), "tag": tag, "scenario": scenario}
         lf.ingest(events)
         desc = "; ".join(f"git {g} runtime v{v}" for g, v in sorted(configs_seen))
         link_run_items(lf, tag, linked, desc)
