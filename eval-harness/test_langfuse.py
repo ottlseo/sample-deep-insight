@@ -27,13 +27,25 @@ class FakeLangfuse:
         self.configs, self.datasets, self.items, self.run_items, self.events = {}, set(), {}, [], []
         self.queues, self.queue_items, self.annotations = {}, [], []
         self.ingestion_errors = ingestion_errors or []
+        self.runs, self.deleted = set(), []
 
     def request(self, method, url, params=None, json=None, timeout=None):
         path = url.split("://", 1)[1].split("/", 1)[1]
         path = "/" + path
         if method == "GET":
             return self._get(path, params or {})
+        if method == "DELETE":
+            return self._delete(path)
         return self._post(path, json)
+
+    def _delete(self, path):
+        self.deleted.append(path)
+        if path.startswith(f"/api/public/datasets/{ls.DATASET}/runs/"):
+            self.runs.discard(path.rsplit("/", 1)[1])
+            self.run_items = [r for r in self.run_items if r["runName"] != path.rsplit("/", 1)[1]]
+        if "/annotation-queues/" in path and "/items/" in path:
+            self.queue_items = [o for o in self.queue_items if f"item-{o}" != path.rsplit("/", 1)[1]]
+        return Resp(200, {})
 
     def _page(self, rows):
         return Resp(200, {"data": rows, "meta": {"totalPages": 1}})
@@ -44,13 +56,17 @@ class FakeLangfuse:
         if path.startswith("/api/public/v2/datasets/"):
             return Resp(200, {"name": path.rsplit("/", 1)[1]}) if path.rsplit("/", 1)[1] in self.datasets else Resp(404, {"message": "not found"})
         if path.startswith(f"/api/public/datasets/{ls.DATASET}/runs/"):
-            return Resp(200, {"id": "run-" + path.rsplit("/", 1)[1]})
+            name = path.rsplit("/", 1)[1]
+            return Resp(200, {"id": "run-" + name}) if name in self.runs else Resp(404, {"message": "not found"})
+        if path == "/api/public/dataset-items":
+            return self._page(list(self.items.values()))
         if path == "/api/public/annotation-queues":
             return self._page(list(self.queues.values()))
         if path.endswith("/items") and "annotation-queues" in path:
-            return self._page([{"objectId": o} for o in self.queue_items])
+            return self._page([{"id": f"item-{o}", "objectId": o} for o in self.queue_items])
         if path == "/api/public/v2/scores":
-            return self._page([a for a in self.annotations if a["traceId"] == params.get("traceId")])
+            return self._page([a for a in self.annotations if a["traceId"] == params.get("traceId")
+                               and params.get("source") in (None, "ANNOTATION")])
         raise AssertionError(f"unexpected GET {path}")
 
     def _post(self, path, body):
@@ -64,7 +80,9 @@ class FakeLangfuse:
             self.items[body["id"]] = body
             return Resp(200, body)
         if path == "/api/public/dataset-run-items":
-            self.run_items.append(body)
+            self.runs.add(body["runName"])
+            self.run_items = [r for r in self.run_items if (r["runName"], r["datasetItemId"]) != (body["runName"], body["datasetItemId"])]
+            self.run_items.append(body)  # Langfuse keeps one run item per (run, dataset item)
             return Resp(200, body)
         if path == "/api/public/ingestion":
             self.events += body["batch"]
@@ -103,14 +121,20 @@ def tag_dir(tmp_path, monkeypatch):
     return tag, run
 
 
-def sync(tag, fake, queue=False):
+def sync(tag, fake, queue=False, manifest=None):
     lf = ls.Langfuse("http://lf", "pk", "sk", session=fake)
     configs = ls.ensure_score_configs(lf, ["total_revenue", "segments"])
-    ls.ensure_dataset_items(lf, {"moon_market_kr_simple": load_scenario("moon_market_kr_simple")})
-    events, trace_id, scenario, _ = ls.run_events(next(tag.glob("*/run.json")).parent, "baseline", configs)
+    run = next(tag.glob("*/run.json")).parent
+    ls.ensure_dataset_items(lf, {"moon_market_kr_simple": load_scenario("moon_market_kr_simple")}, {"moon_market_kr_simple": ls.repeat_of(run)})
+    events, trace_id, scenario, _, started = ls.run_events(run, "baseline", configs)
     lf.ingest(events)
-    ls.link_run_items(lf, "baseline", [(trace_id, scenario)], "git abcdef1")
+    ls.reset_dataset_run(lf, "baseline", ls.pairwise_names(tag))
+    ls.link_run_items(lf, "baseline", [(trace_id, scenario, ls.repeat_of(run), started)], "git abcdef1")
     n_pw = ls.pairwise_scores(lf, tag)
+    if manifest is not None:
+        current = {trace_id: {"run_dir": str(run), "tag": "baseline", "scenario": scenario}}
+        ls.retire_traces(lf, manifest, current)
+        manifest.update(current)
     if queue:
         ls.queue_traces(lf, [trace_id], configs)
     return lf, trace_id, n_pw
@@ -145,15 +169,53 @@ def test_dataset_item_run_item_and_pairwise(tag_dir):
     tag, _ = tag_dir
     fake = FakeLangfuse()
     _, trace_id, n_pw = sync(tag, fake)
-    item = fake.items[ls.sid("item", "moon_market_kr_simple")]
+    item = fake.items[ls.item_id("moon_market_kr_simple", 1)]
+    assert item["input"]["repeat"] == 1
     assert item["expectedOutput"]["pass"]["required_facts"] == ["total_revenue", "order_count", "avg_order_value"]
     answers = {a["id"]: a for a in item["expectedOutput"]["answer_key"]}
     assert answers["total_revenue"]["value"] == 16431923.0
     ranking = next(a for a in answers.values() if a["kind"] == "ranking")   # rankings carry their order, not a value
     assert ranking["order"] and "value" not in ranking
-    assert fake.run_items == [{"runName": "baseline", "runDescription": "git abcdef1", "datasetItemId": item["id"], "traceId": trace_id}]
+    assert fake.run_items == [{"runName": "baseline", "runDescription": "git abcdef1", "datasetItemId": item["id"], "traceId": trace_id,
+                               "createdAt": "2026-10-02T06:00:00Z"}]   # the run's own time, not the upload time
     pw = [e["body"] for e in fake.events if e["body"].get("datasetRunId")]
     assert n_pw == 1 and pw[0]["datasetRunId"] == "run-baseline" and pw[0]["value"] == 0.5
+
+
+def test_every_timestamp_is_the_runs_own_time(tag_dir):
+    """The UI looks a trace up by the clicked score's / run item's time; upload-time stamps hid traces."""
+    tag, _ = tag_dir
+    fake = FakeLangfuse()
+    sync(tag, fake)
+    by_type = {}
+    for e in fake.events:
+        if e["body"].get("datasetRunId"):
+            continue  # run-level pairwise scores aren't used to look up traces
+        by_type.setdefault(e["type"], set()).add(e["timestamp"][:10])
+    assert by_type["trace-create"] == {"2026-10-02"} and by_type["score-create"] == {"2026-10-02"}
+
+
+def test_changed_results_replace_the_trace(tag_dir):
+    tag, run = tag_dir
+    fake, manifest = FakeLangfuse(), {}
+    _, first, _ = sync(tag, fake, queue=True, manifest=manifest)
+    _, same, _ = sync(tag, fake, manifest=manifest)
+    assert same == first and not any("/traces/" in d for d in fake.deleted)     # unchanged → same trace
+    (run / "judge.json").write_text((run / "judge.json").read_text().replace("why insight_depth", "rewritten"))
+    _, second, _ = sync(tag, fake, manifest=manifest)
+    assert second != first and f"/api/public/traces/{first}" in fake.deleted
+    assert set(manifest) == {second} and first not in fake.queue_items
+
+
+def test_labeled_trace_is_kept(tag_dir):
+    tag, run = tag_dir
+    fake, manifest = FakeLangfuse(), {}
+    _, first, _ = sync(tag, fake, manifest=manifest)
+    fake.annotations = [{"traceId": first, "name": "insight_depth", "value": 3}]
+    (run / "judge.json").write_text((run / "judge.json").read_text().replace("why insight_depth", "rewritten"))
+    _, second, _ = sync(tag, fake, manifest=manifest)
+    assert f"/api/public/traces/{first}" not in fake.deleted
+    assert manifest[first]["superseded_by"] == second
 
 
 def test_configs_created_once(tag_dir):

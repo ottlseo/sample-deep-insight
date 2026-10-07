@@ -17,11 +17,18 @@ What goes where:
                                        `deep-insight-calibration` for human labels that
                                        use the same score configs as the judge
 
-IDs are derived from the run's path, so syncing again updates in place instead
-of duplicating. Credentials: LANGFUSE_HOST, LANGFUSE_PUBLIC_KEY,
+Langfuse keeps one trace per dataset item per run, so each repeat of a
+scenario is its own item ("moon_market_kr #1", "#2", ...). Every timestamp is
+the run's own time: the UI looks traces up by the time of the score or run
+item you click, and an upload-time stamp sends it to the wrong day. Langfuse
+doesn't let a score's time change once written, so trace and score ids carry
+a hash of the run's content: syncing unchanged results is a no-op, and changed
+results get a new trace while the old one is deleted (kept, with a warning, if
+people already labeled it). Credentials: LANGFUSE_HOST, LANGFUSE_PUBLIC_KEY,
 LANGFUSE_SECRET_KEY from the environment or eval-harness/langfuse.env.
 """
 import argparse
+import hashlib
 import json
 import os
 import sys
@@ -88,6 +95,9 @@ class Langfuse:
     def post(self, path, body):
         return self._call("POST", path, json=body)
 
+    def delete(self, path):
+        return self._call("DELETE", path)
+
     def pages(self, path, **params):
         page = 1
         while True:
@@ -104,8 +114,31 @@ class Langfuse:
                 raise RuntimeError(f"ingestion rejected {len(res['errors'])} event(s): {res['errors'][:3]}")
 
 
-def _event(kind, body, event_id):
-    return {"id": event_id, "type": kind, "timestamp": _iso(datetime.now(timezone.utc)), "body": body}
+def _event(kind, body, event_id, ts=None):
+    return {"id": event_id, "type": kind, "timestamp": _iso(ts or datetime.now(timezone.utc)), "body": body}
+
+
+def repeat_of(run_dir):
+    """Repeat number from run_eval.py's folder name <scenario>-<date>-<time>-<n>."""
+    tail = Path(run_dir).name.rsplit("-", 1)[-1]
+    return int(tail) if tail.isdigit() else 1
+
+
+def item_id(scenario, repeat):
+    return sid("item", scenario, str(repeat))
+
+
+def content_rev(run_dir):
+    """Short hash of everything a trace shows, so changed results get a new trace."""
+    h = hashlib.sha256()
+    for name in ("run.json", "scores.json", "judge.json", "factcheck.json", "config.json"):
+        f = Path(run_dir) / name
+        if f.is_file():
+            h.update(name.encode() + f.read_bytes())
+    docx = artifacts_dir(run_dir) / "final_report_with_citations.docx"
+    if docx.is_file():
+        h.update(docx.read_bytes())
+    return h.hexdigest()[:12]
 
 
 # --- setup: score configs, dataset, items --------------------------------------
@@ -122,20 +155,25 @@ def ensure_score_configs(lf, requirement_ids):
     return have
 
 
-def ensure_dataset_items(lf, scenarios):
+def ensure_dataset_items(lf, scenarios, repeats):
+    """One item per (scenario, repeat); repeats maps scenario → highest repeat number seen."""
     try:
         lf.get(f"/api/public/v2/datasets/{DATASET}")
     except RuntimeError:
         lf.post("/api/public/v2/datasets", {"name": DATASET, "description": "Deep Insight eval scenarios (eval-harness/scenarios.yaml)"})
+    existing = {i["id"] for i in lf.pages("/api/public/dataset-items", datasetName=DATASET)}
     for name, s in scenarios.items():
         key = json.loads(Path(s["answer_key"]).read_text(encoding="utf-8"))
-        lf.post("/api/public/dataset-items", {
-            "datasetName": DATASET, "id": sid("item", name),
-            "input": {"scenario": name, "query": s["query"].strip(), "data_directory": s["data_directory"]},
-            "expectedOutput": {"requirements": s.get("requirements", []), "pass": s.get("pass", {}),
-                               "answer_key": [_answer(f) for f in key["facts"]]},
-            "metadata": {"holdout": bool(s.get("holdout")), "hitl": s.get("hitl") or []},
-        })
+        base = {"datasetName": DATASET,
+                "input": {"scenario": name, "query": s["query"].strip(), "data_directory": s["data_directory"]},
+                "expectedOutput": {"requirements": s.get("requirements", []), "pass": s.get("pass", {}),
+                                   "answer_key": [_answer(f) for f in key["facts"]]},
+                "metadata": {"holdout": bool(s.get("holdout")), "hitl": s.get("hitl") or []}}
+        for k in range(1, max(repeats.get(name, 1), 1) + 1):
+            lf.post("/api/public/dataset-items", {**base, "id": item_id(name, k), "input": {**base["input"], "repeat": k}})
+        legacy = sid("item", name)  # one item per scenario, before repeats were split
+        if legacy in existing:
+            lf.post("/api/public/dataset-items", {**base, "id": legacy, "status": "ARCHIVED"})
 
 
 def _answer(fact):
@@ -157,8 +195,9 @@ def run_events(run_dir, tag, configs):
     scores, details = scores_doc["scores"], scores_doc.get("details", {})
     config = json.loads((run_dir / "config.json").read_text(encoding="utf-8")) if (run_dir / "config.json").is_file() else {}
     scenario = meta["scenario"]
-    trace_id = sid("trace", tag, run_dir.name)
+    trace_id = sid("trace", tag, run_dir.name, content_rev(run_dir))
     started = datetime.fromisoformat(meta["started_at"]) if meta.get("started_at") else datetime.now(timezone.utc)
+    ended = started + timedelta(seconds=float(meta.get("duration_s") or 1))
 
     report = ""
     docx = artifacts_dir(run_dir) / "final_report_with_citations.docx"
@@ -180,7 +219,7 @@ def run_events(run_dir, tag, configs):
                      "session_id": meta.get("session_id"), "agent_calls": meta.get("agent_calls"), "warning": meta.get("warning"),
                      "judge_summary": (judge or {}).get("verdict", {}).get("summary"),
                      "factcheck_version": scores.get("factcheck_version"), "factcheck_skipped": scores.get("factcheck_skipped")},
-    }, sid("ev", trace_id, "trace"))]
+    }, sid("ev", trace_id, "trace"), started)]
 
     # one generation per agent: tokens, cost, first-to-last event span
     by_agent = (details.get("cost_by_agent") or {})
@@ -196,7 +235,7 @@ def run_events(run_dir, tag, configs):
                 "metadata": {"calls": (meta.get("agent_calls") or {}).get(agent), "cache_hit_rate": a.get("cache_hit_rate")}}
         if a.get("cost_usd") is not None:
             body["costDetails"] = {"total": a["cost_usd"]}
-        events.append(_event("generation-create", body, sid("ev", trace_id, "gen", agent)))
+        events.append(_event("generation-create", body, sid("ev", trace_id, "gen", agent), start))
 
     def score(name, value, data_type, comment=None, config_id=None):
         body = {"id": sid("score", trace_id, name), "traceId": trace_id, "name": name, "value": value, "dataType": data_type}
@@ -204,7 +243,7 @@ def run_events(run_dir, tag, configs):
             body["comment"] = comment[:3000]
         if config_id:
             body["configId"] = config_id
-        events.append(_event("score-create", body, sid("ev", trace_id, "score", name)))
+        events.append(_event("score-create", body, sid("ev", trace_id, "score", name), ended))
 
     reasons = ", ".join(scores.get("core_fail_reasons") or []) or None
     for k in BOOLEAN_SCORES:
@@ -222,7 +261,7 @@ def run_events(run_dir, tag, configs):
         for r in v.get("requirements", []):
             name = f"req.{r['requirement_id']}"
             score(name, r["status"], "CATEGORICAL", comment=r.get("evidence"), config_id=configs.get(name))
-    return events, trace_id, scenario, config
+    return events, trace_id, scenario, config, started
 
 
 def _agent_first_seen(run_dir):
@@ -244,10 +283,63 @@ def _agent_first_seen(run_dir):
 
 # --- dataset runs, pairwise, annotation queue ---------------------------------------
 
+def reset_dataset_run(lf, tag, pairwise_names):
+    """Delete the dataset run (and its pairwise scores) so it can be rebuilt from the current traces."""
+    try:
+        run = lf.get(f"/api/public/datasets/{DATASET}/runs/{tag}")
+    except RuntimeError:
+        return
+    for name in pairwise_names:
+        try:
+            lf.delete(f"/api/public/scores/{sid('score', run['id'], name)}")
+        except RuntimeError:
+            pass
+    lf.delete(f"/api/public/datasets/{DATASET}/runs/{tag}")
+
+
 def link_run_items(lf, tag, linked, description):
-    for trace_id, scenario in linked:
+    """linked: (trace_id, scenario, repeat, started) per run."""
+    for trace_id, scenario, repeat, started in linked:
         lf.post("/api/public/dataset-run-items", {"runName": tag, "runDescription": description,
-                                                 "datasetItemId": sid("item", scenario), "traceId": trace_id})
+                                                 "datasetItemId": item_id(scenario, repeat), "traceId": trace_id,
+                                                 "createdAt": _iso(started)})
+
+
+def retire_traces(lf, manifest, current):
+    """Delete traces this tool made earlier for the same runs, unless people labeled them."""
+    by_run = {v["run_dir"]: t for t, v in current.items()}
+    kept, deleted = [], 0
+    for trace_id, entry in list(manifest.items()):
+        if trace_id in current or entry["run_dir"] not in by_run:
+            continue
+        labels = list(lf.pages("/api/public/v2/scores", traceId=trace_id, source="ANNOTATION"))
+        if labels:
+            kept.append(trace_id)
+            entry["superseded_by"] = by_run[entry["run_dir"]]
+            continue
+        lf.delete(f"/api/public/traces/{trace_id}")
+        _unqueue(lf, trace_id)
+        del manifest[trace_id]
+        deleted += 1
+    return deleted, kept
+
+
+def _unqueue(lf, trace_id):
+    """Drop a deleted trace from the annotation queue so nobody is asked to label it."""
+    queue = next((q for q in lf.pages("/api/public/annotation-queues") if q["name"] == QUEUE), None)
+    if queue is None:
+        return
+    for item in lf.pages(f"/api/public/annotation-queues/{queue['id']}/items"):
+        if item["objectId"] == trace_id:
+            lf.delete(f"/api/public/annotation-queues/{queue['id']}/items/{item['id']}")
+
+
+def pairwise_names(tag_dir):
+    names = []
+    for f in Path(tag_dir).glob("pairwise_vs_*.json"):
+        summary = json.loads(f.read_text(encoding="utf-8"))
+        names += [f"pairwise_win_rate_vs_{summary['baseline']}.{sc}" for sc, s in summary["scenarios"].items() if s.get("pairs")]
+    return names
 
 
 def pairwise_scores(lf, tag_dir):
@@ -313,26 +405,38 @@ def main():
 
     lf = Langfuse(*credentials())
     configs = ensure_score_configs(lf, req_ids)
-    ensure_dataset_items(lf, scenarios)
+    tag_runs = {Path(t).name: sorted(p.parent for p in Path(t).glob("*/scores.json") if (p.parent / "run.json").is_file())
+                for t in args.tags}
+    repeats = {}
+    for runs in tag_runs.values():
+        for r in runs:
+            sc = json.loads((r / "run.json").read_text(encoding="utf-8"))["scenario"]
+            repeats[sc] = max(repeats.get(sc, 0), repeat_of(r))
+    ensure_dataset_items(lf, scenarios, repeats)
     manifest_path = HERE / "eval_results" / "langfuse_sync.json"
     manifest = json.loads(manifest_path.read_text()) if manifest_path.is_file() else {}
     all_traces = []
     for tag_dir in args.tags:
         tag = Path(tag_dir).name
-        runs = sorted(p.parent for p in Path(tag_dir).glob("*/scores.json") if (p.parent / "run.json").is_file())
-        events, linked, configs_seen = [], [], set()
-        for r in runs:
-            ev, trace_id, scenario, config = run_events(r, tag, configs)
+        events, linked, configs_seen, current = [], [], set(), {}
+        for r in tag_runs[tag]:
+            ev, trace_id, scenario, config, started = run_events(r, tag, configs)
             events += ev
-            linked.append((trace_id, scenario))
+            linked.append((trace_id, scenario, repeat_of(r), started))
             configs_seen.add((str(config.get("git_sha", ""))[:7], str(config.get("runtime_version"))))
-            manifest[trace_id] = {"run_dir": str(r.resolve().relative_to(HERE)), "tag": tag, "scenario": scenario}
+            current[trace_id] = {"run_dir": str(r.resolve().relative_to(HERE)), "tag": tag, "scenario": scenario}
         lf.ingest(events)
+        reset_dataset_run(lf, tag, pairwise_names(tag_dir))
         desc = "; ".join(f"git {g} runtime v{v}" for g, v in sorted(configs_seen))
         link_run_items(lf, tag, linked, desc)
         n_pw = pairwise_scores(lf, tag_dir)
-        all_traces += [t for t, _ in linked]
-        print(f"{tag}: {len(runs)} runs, {len(events)} events, {n_pw} pairwise scores → dataset run '{tag}'")
+        deleted, kept = retire_traces(lf, manifest, current)
+        manifest.update(current)
+        all_traces += [t for t, *_ in linked]
+        print(f"{tag}: {len(tag_runs[tag])} runs, {len(events)} events, {n_pw} pairwise scores → dataset run '{tag}'"
+              + (f" · replaced {deleted} outdated trace(s)" if deleted else ""))
+        for t in kept:
+            print(f"  ⚠ kept outdated trace {t}: it has human labels; re-label its replacement {manifest[t]['superseded_by']}")
     manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
     if args.queue:
         queue, added = queue_traces(lf, all_traces, configs)

@@ -186,8 +186,13 @@ uses the public REST API):
 .venv/bin/python calibrate.py langfuse     # judge vs labels entered in the annotation queue
 ```
 
-IDs come from each run's path, so syncing again updates in place. When
-labeling in the queue, hide the API (judge) scores so labels stay blind.
+Langfuse keeps one trace per dataset item per run, so each repeat is its own
+item (`moon_market_kr #1`, `#2`, …). Every timestamp is the run's own time:
+the UI finds a trace by the time of the score or run item you click. Trace
+and score ids carry a hash of the run's content, so syncing unchanged results
+is a no-op and changed results replace the old trace (kept, with a warning,
+if it already has human labels). When labeling in the queue, hide the API
+(judge) scores so labels stay blind.
 
 ## Setup
 
