@@ -401,41 +401,62 @@ var TraceView = (function() {
         return '{' + parts.join(', ') + '}';
     }
 
-    function jvKey(row, key) {
-        if (key == null) return;
-        row.appendChild(el('span', typeof key === 'number' ? 'jv-index' : 'jv-key', key + ': '));
+    // Key | value table: one bordered row per key, nested values indented
+    // below their row. Clicking an object's row opens or closes it.
+    function jtRows(container, value, path, ctx, depth) {
+        var isArray = Array.isArray(value);
+        (isArray ? value.map(function(_, i) { return i; }) : Object.keys(value)).forEach(function(k) {
+            container.appendChild(jtRow(k, value[k], path + '.' + k, ctx, depth, isArray));
+        });
     }
 
-    function jvValue(value, key, path, ctx, depth) {
-        if (!(value && typeof value === 'object')) {
-            var row = el('div', 'jv-row');
-            jvKey(row, key);
+    function jtRow(key, value, path, ctx, depth, indexed) {
+        var wrap = el('div', 'jt-entry' + (depth === 0 ? ' jt-top' : ''));
+        var row = el('div', 'jt-row');
+        var keyCell = el('div', 'jt-key');
+        keyCell.style.paddingLeft = (0.6 + depth * 1.1) + 'rem';
+        var valCell = el('div', 'jt-val');
+        row.appendChild(keyCell);
+        row.appendChild(valCell);
+        wrap.appendChild(row);
+
+        var nested = value && typeof value === 'object';
+        if (!nested) {
+            keyCell.appendChild(el('span', 'jt-caret', ''));
+            keyCell.appendChild(el('span', indexed ? 'jv-index' : 'jv-key', indexed ? '[' + key + ']' : key));
             if (typeof value === 'string' && (value.indexOf('\n') >= 0 || value.length > 160 || CODE_KEYS.indexOf(key) >= 0)) {
-                row.appendChild(el('div', 'jv-block' + (CODE_KEYS.indexOf(key) >= 0 ? ' code' : ''), value));
-                return row;
+                valCell.appendChild(el('div', 'jv-block' + (CODE_KEYS.indexOf(key) >= 0 ? ' code' : ''), value));
+            } else {
+                var cls = value === null ? 'jv-null' : typeof value === 'string' ? 'jv-str' : typeof value === 'number' ? 'jv-num' : 'jv-bool';
+                if (key === 'status') cls += value === 'completed' ? ' jv-ok' : ' jv-fail';
+                valCell.appendChild(el('span', cls, typeof value === 'string' ? value : String(value)));
             }
-            var cls = value === null ? 'jv-null' : typeof value === 'string' ? 'jv-str' : typeof value === 'number' ? 'jv-num' : 'jv-bool';
-            if (key === 'status') cls += value === 'completed' ? ' jv-ok' : ' jv-fail';
-            row.appendChild(el('span', cls, typeof value === 'string' ? '"' + value + '"' : String(value)));
-            return row;
+            return wrap;
         }
+
         var isArray = Array.isArray(value);
-        var node = el('details', 'jv-node');
+        var count = isArray ? value.length : Object.keys(value).length;
         var stateKey = 'jv:' + path;
-        node.open = stateKey in ctx.state.open ? ctx.state.open[stateKey] : depth === 0;
-        node.addEventListener('toggle', function() { ctx.state.open[stateKey] = node.open; });
-        var summary = el('summary', 'jv-row');
-        jvKey(summary, key);
-        summary.appendChild(el('span', 'jv-preview', jvPreview(value)));
-        summary.appendChild(el('span', 'jv-open', isArray ? '[' : '{'));
-        node.appendChild(summary);
-        var children = el('div', 'jv-children');
-        (isArray ? value.map(function(_, i) { return i; }) : Object.keys(value)).forEach(function(k) {
-            children.appendChild(jvValue(value[k], k, path + '.' + k, ctx, depth + 1));
-        });
-        node.appendChild(children);
-        node.appendChild(el('div', 'jv-close', isArray ? ']' : '}'));
-        return node;
+        var caret = el('span', 'jt-caret');
+        keyCell.appendChild(caret);
+        keyCell.appendChild(el('span', indexed ? 'jv-index' : 'jv-key', indexed ? '[' + key + ']' : key));
+        var children = el('div', 'jt-children');
+        var filled = false;
+        function apply(open) {
+            ctx.state.open[stateKey] = open;
+            wrap.classList.toggle('open', open);
+            caret.textContent = open ? '▾' : '▸';
+            valCell.replaceChildren(el('span', open ? 'jv-type' : 'jv-preview', open ? (isArray ? '[' + count + ']' : '{' + count + '}') : jvPreview(value)));
+            if (open && !filled) { jtRows(children, value, path, ctx, depth + 1); filled = true; }
+            children.hidden = !open;
+        }
+        row.classList.add('jt-toggle');
+        row.onclick = function() { apply(!wrap.classList.contains('open')); };
+        wrap.jtApply = apply;
+        wrap.appendChild(children);
+        // Rounds, and the list of tool calls in each, start open; deeper values start closed
+        apply(stateKey in ctx.state.open ? ctx.state.open[stateKey] : depth === 0 || key === 'tool_calls');
+        return wrap;
     }
 
     function processSection(items, ctx, key) {
@@ -455,13 +476,21 @@ var TraceView = (function() {
         bar.appendChild(collapse);
         wrap.appendChild(bar);
 
-        var viewer = el('div', 'jv');
-        viewer.appendChild(jvValue(rounds.map(roundJson), null, key, ctx, 0));
+        var viewer = el('div', 'jt');
+        var data = rounds.map(roundJson);
+        if (data.length) jtRows(viewer, data, key, ctx, 0);
+        else viewer.appendChild(el('div', 'tv-empty', t('files_none')));
+        // Expanding fills nested rows lazily, so open level by level until none are closed
         expand.onclick = function() {
-            viewer.querySelectorAll('details.jv-node').forEach(function(d) { d.open = true; });
+            for (var guard = 0; guard < 20; guard++) {
+                var closed = viewer.querySelectorAll('.jt-entry:not(.open)');
+                var any = false;
+                closed.forEach(function(e) { if (e.jtApply) { e.jtApply(true); any = true; } });
+                if (!any) break;
+            }
         };
         collapse.onclick = function() {
-            viewer.querySelectorAll('details.jv-node').forEach(function(d, i) { d.open = i === 0; });
+            viewer.querySelectorAll('.jt-entry.open').forEach(function(e) { e.jtApply(false); });
         };
         wrap.appendChild(viewer);
         return section(t('tv_process'), true, wrap);
