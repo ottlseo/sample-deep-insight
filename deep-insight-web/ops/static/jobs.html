@@ -208,6 +208,7 @@
         .drawer-tab.active { color: var(--text-primary); border-bottom-color: var(--accent); }
         .drawer-tab .tab-count { margin-left: 0.3rem; color: var(--text-muted); font-weight: 500; }
         .drawer-empty { color: var(--text-muted); padding: 2rem 0; }
+        .drawer-error { color: var(--red); font-size: 0.8rem; word-break: break-word; }
         .btn-accent { color: var(--accent); border-color: rgba(74, 124, 255, 0.4); }
         .mono { font-family: var(--font-mono); font-size: 0.8rem; color: var(--text-muted); }
         .empty-state { text-align: center; color: var(--text-muted); padding: 3rem; font-size: 1rem; }
@@ -428,9 +429,17 @@
             return allJobs.find(function(j) { return j.job_id === id; });
         }
 
+        // The open job is in the URL (?job=<id>), so a link opens it again
+        function setJobParam(jobId) {
+            var url = new URL(window.location.href);
+            if (jobId) url.searchParams.set('job', jobId); else url.searchParams.delete('job');
+            history.replaceState(null, '', url);
+        }
+
         function openDrawer(jobId) {
             if (drawerJobId !== jobId) { drawerState = {}; drawerFiles = null; }
             drawerJobId = jobId;
+            setJobParam(jobId);
             document.getElementById('drawer').classList.add('open');
             document.getElementById('drawer').setAttribute('aria-hidden', 'false');
             document.getElementById('drawerBackdrop').classList.add('open');
@@ -448,6 +457,7 @@
 
         function closeDrawer() {
             drawerJobId = null;
+            setJobParam(null);
             if (drawerTimer) { clearTimeout(drawerTimer); drawerTimer = null; }
             document.getElementById('drawer').classList.remove('open');
             document.getElementById('drawer').setAttribute('aria-hidden', 'true');
@@ -472,6 +482,9 @@
             meta.appendChild(TraceView.el('span', null, t('th_tokens') + ' ' + formatTokens(job.total_tokens)));
             meta.appendChild(TraceView.el('span', null, job.job_id));
             title.appendChild(meta);
+            if (job.status === 'Failed' && job.error_message) {
+                title.appendChild(TraceView.el('div', 'drawer-error', job.error_message));
+            }
             header.appendChild(title);
 
             var actions = TraceView.el('div', 'drawer-actions');
@@ -481,9 +494,6 @@
                 dl.href = FilesView.fileUrl(job.job_id, 'artifacts', report, true);
                 actions.appendChild(dl);
             }
-            var page = TraceView.el('a', 'btn-sm', t('drawer_open_page'));
-            page.href = '/admin/dashboard/' + encodeURIComponent(job.job_id);
-            actions.appendChild(page);
             var close = TraceView.el('button', 'btn-sm', '✕');
             close.title = t('drawer_close');
             close.onclick = closeDrawer;
@@ -560,7 +570,10 @@
         }
 
         applyAdminLang();
-        fetchJobs();
+        fetchJobs().then(function() {
+            var linked = new URL(window.location.href).searchParams.get('job');
+            if (linked && findJob(linked)) openDrawer(linked);
+        });
         setInterval(fetchJobs, 30000);
     </script>
 </body>

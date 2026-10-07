@@ -86,7 +86,7 @@
 .tv-icon-hitl { border-radius: 2px; transform: rotate(45deg); width: 9px; height: 9px; }
 /* Supervisor turns: between the agents it delegates to */
 .tv-icon-turn { width: 8px; height: 8px; background: none; border: 2px solid; }
-.tv-row-turn { height: 1.8rem; font-size: 0.75rem; }
+.tv-row-turn { height: 2.1rem; font-size: 0.75rem; }
 .tv-row-turn .tv-label { color: var(--text-secondary); }
 .tv-arrow { color: var(--text-muted); font-size: 0.72rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tv-bar.turn { opacity: 0.45; }
@@ -203,6 +203,56 @@ details.tv-step[open] > summary .tv-step-preview { display: none; }
     color: var(--agent-color);
     border: 1px solid var(--agent-color);
 }
+
+/* Rounds: a response, then the tool calls it made, as a small tree */
+.tv-process-actions { align-items: center; }
+.tv-process-summary { margin-right: auto; display: inline-flex; align-items: center; gap: 0.3rem; font-size: 0.75rem; color: var(--text-muted); }
+.tv-rounds { display: flex; flex-direction: column; gap: 0.7rem; }
+.tv-round-head { display: flex; align-items: flex-start; gap: 0.55rem; }
+.tv-round-head > details { flex: 1; min-width: 0; }
+.tv-round-num {
+    flex-shrink: 0;
+    width: 1.5rem;
+    height: 1.5rem;
+    margin-top: 0.35rem;
+    border-radius: 50%;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-hover);
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+.tv-round-none { flex: 1; padding: 0.5rem 0; color: var(--text-muted); font-size: 0.78rem; font-style: italic; }
+.tv-round-calls {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    margin: 0.3rem 0 0 0.72rem;
+    padding-left: 1.35rem;
+    border-left: 2px solid var(--border);
+}
+.tv-call { position: relative; }
+.tv-call::before {
+    content: '';
+    position: absolute;
+    left: -1.35rem;
+    top: 1.05rem;
+    width: 1.1rem;
+    border-top: 2px solid var(--border);
+}
+.tv-call:last-child::after {
+    /* end the rail at the last branch */
+    content: '';
+    position: absolute;
+    left: calc(-1.35rem - 2px);
+    top: calc(1.05rem + 2px);
+    bottom: -0.4rem;
+    border-left: 2px solid var(--bg-card);
+}
+.tv-tool-icon { flex-shrink: 0; color: var(--amber); font-size: 0.8rem; }
 
 /* JSON tree */
 .json-node > summary { cursor: pointer; font-family: var(--font-mono); font-size: 0.75rem; }

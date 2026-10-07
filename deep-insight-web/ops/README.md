@@ -167,9 +167,12 @@ After login, the dashboard shows all analysis jobs with status, duration, tokens
 
 <img src="img/admin_job_list_page.png" alt="Admin Jobs Dashboard" width="700"/>
 
-Click any job row to view full details: token breakdown, generated images and files (inline preview, download), input data, report download, and the agent trace. The trace shows the agents as steps in run order (Coordinator → Planner → Supervisor → Coder → …); click a step to see its records: response, reasoning, tool calls with their code, tool output. Each record collapses to a one-line preview and opens as formatted text or a JSON tree; the raw record is one click further. Plan reviews show the plan, the decision, and the user's feedback, with a summary of every review at the top of the trace. Running jobs show the agents finished so far; jobs that ran before the runtime recorded traces show files only.
+Click a row to open the job in a side panel (the URL gets `?job=<id>`, so the link opens it again; Esc closes it). It has two tabs and a report download button:
 
-<img src="img/Job_detail_page.png" alt="Job Detail Page" width="700"/>
+- **Trace**: left half, the agents in run order: Coordinator, Planner, plan reviews (HITL, with the user's decision and feedback), and the Supervisor with each sub-agent it ran. The Supervisor's own work between agents shows as `Supervisor → Coder`, `Supervisor → Tracker`, … rows. Each row has a timeline bar, latency and tokens. Right half, the selected agent: its input, its process as numbered rounds (a response, with the tool calls it made branching below it; each opens to show the code and output), its output, and metadata. A running job refreshes every 15 seconds and marks the running agents.
+- **Files**: input data, result documents (report first), generated images, and every generated file.
+
+Jobs that ran before the runtime recorded traces show files only; jobs from before agent inputs were recorded show "not recorded" as the input.
 
 ---
 

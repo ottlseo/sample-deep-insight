@@ -109,3 +109,9 @@ def test_rejects_traversal_and_unknown_area(client):
     assert client.get("/admin/api/jobs/job-1/files/artifacts/a/%2E%2E/b").status_code in (400, 404)
     assert client.get("/admin/api/jobs/job-1/files/debug/x.json").status_code == 404
     assert client.get("/admin/api/jobs/job-2/files/artifacts/chart.png").status_code == 404
+
+
+def test_old_job_page_url_opens_the_side_panel(client):
+    r = client.get("/admin/dashboard/job-1", follow_redirects=False)
+    assert r.status_code in (302, 307) and r.headers["location"] == "/admin/dashboard?job=job-1"
+    assert client.get("/admin/dashboard/a.b", follow_redirects=False).status_code == 404

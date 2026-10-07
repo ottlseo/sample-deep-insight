@@ -341,7 +341,7 @@ var TraceView = (function() {
     // One collapsible step of an agent's process: a response, reasoning, a
     // tool call (input + result), a delegation to a sub-agent, or the result
     // a sub-agent handed back.
-    function stepBlock(it, ctx) {
+    function stepBlock(it, ctx, compact) {
         var key, d = el('details', 'tv-step'), summary = el('summary'), body = el('div', 'tv-step-body');
         if (it.record) {
             var r = it.record;
@@ -352,7 +352,7 @@ var TraceView = (function() {
         } else if (it.returned) {
             var back = it.returned;
             key = 'b' + back.id;
-            summary.appendChild(el('span', 'tv-step-kind', t('trace_tool_result')));
+            summary.appendChild(el('span', 'tv-step-kind', compact ? '↩ ' + t('tv_returned') : t('trace_tool_result')));
             summary.appendChild(el('span', 'tv-tool-name', back.name));
             subAgents(back).forEach(function(a) { summary.appendChild(agentChip(a.agent)); });
             summary.appendChild(el('span', 'tv-step-preview', preview(back.output, 120)));
@@ -361,7 +361,7 @@ var TraceView = (function() {
             var call = it.tool || it.delegate;
             var subs = subAgents(call);
             key = 'c' + call.id;
-            summary.appendChild(el('span', 'tv-step-kind', t('trace_tool_call')));
+            summary.appendChild(el('span', compact ? 'tv-tool-icon' : 'tv-step-kind', compact ? '⚙' : t('trace_tool_call')));
             summary.appendChild(el('span', 'tv-tool-name', call.name));
             subs.forEach(function(a) { summary.appendChild(agentChip(a.agent)); });
             var badge = statusBadge(call.output);
@@ -392,21 +392,92 @@ var TraceView = (function() {
         return d;
     }
 
+    // An agent works in rounds: a response (its reasoning and message), then
+    // the tool calls that response made; their results lead to the next round.
+    function roundsOf(items) {
+        var rounds = [], cur = null;
+        items.forEach(function(it) {
+            if (it.record) {
+                if (!cur || cur.calls.length) { cur = { records: [], calls: [] }; rounds.push(cur); }
+                cur.records.push(it.record);
+            } else {
+                if (!cur) { cur = { records: [], calls: [] }; rounds.push(cur); }
+                cur.calls.push(it);
+            }
+        });
+        return rounds;
+    }
+
+    function callFailed(it) {
+        var r = it.tool && splitResult(it.tool.output);
+        return !!(r && r.status !== 'completed');
+    }
+
+    function roundBlock(round, index, ctx) {
+        var box = el('div', 'tv-round');
+        var head = el('div', 'tv-round-head');
+        head.appendChild(el('span', 'tv-round-num', String(index + 1)));
+        var texts = round.records.filter(function(r) { return r.kind === 'text'; });
+        if (round.records.length) {
+            var key = 'g' + round.records[0].seq;
+            var d = el('details', 'tv-step tv-round-text');
+            var summary = el('summary');
+            summary.appendChild(el('span', 'tv-step-kind', texts.length ? t('trace_text') : t('trace_reasoning')));
+            summary.appendChild(el('span', 'tv-step-preview', preview((texts[0] || round.records[0]).text, 160)));
+            d.appendChild(summary);
+            var body = el('div', 'tv-step-body');
+            round.records.forEach(function(r) {
+                body.appendChild(textBlock(r.text, r.kind === 'reasoning' ? 'tv-text muted' : 'tv-text'));
+            });
+            d.appendChild(body);
+            d.open = !!ctx.state.open[key];
+            d.addEventListener('toggle', function() { ctx.state.open[key] = d.open; });
+            head.appendChild(d);
+        } else if (round.calls.every(function(it) { return it.returned; })) {
+            // a Supervisor turn opens with what the previous agent handed back
+            var from = [];
+            round.calls.forEach(function(it) { subAgents(it.returned).forEach(function(a) { from.push(agentLabel(a.agent)); }); });
+            head.appendChild(el('span', 'tv-round-none', t('tv_received_from').replace('{agent}', from.join(', '))));
+        } else {
+            head.appendChild(el('span', 'tv-round-none', t('tv_no_response')));
+        }
+        box.appendChild(head);
+        if (round.calls.length) {
+            var calls = el('div', 'tv-round-calls');
+            round.calls.forEach(function(it) {
+                var row = el('div', 'tv-call');
+                row.appendChild(stepBlock(it, ctx, true));
+                calls.appendChild(row);
+            });
+            box.appendChild(calls);
+        }
+        return box;
+    }
+
     function processSection(items, ctx) {
+        var rounds = roundsOf(items);
+        var calls = items.filter(function(it) { return it.tool || it.delegate; });
+        var failed = items.filter(callFailed).length;
+
         var wrap = el('div');
-        var actions = el('div', 'tv-process-actions');
+        var bar = el('div', 'tv-process-actions');
+        var summary = el('span', 'tv-process-summary',
+            t('tv_rounds') + ' ' + rounds.length + ' · ' + t('trace_tool_call') + ' ' + calls.length +
+            (failed ? ' · ' : ''));
+        if (failed) summary.appendChild(el('span', 'tv-badge tv-badge-fail', t('tv_failed') + ' ' + failed));
+        bar.appendChild(summary);
         var expand = el('button', 'tv-link', t('trace_expand_all'));
         var collapse = el('button', 'tv-link', t('trace_collapse_all'));
-        actions.appendChild(expand);
-        actions.appendChild(collapse);
-        var list = el('div', 'tv-process');
-        items.forEach(function(it) { list.appendChild(stepBlock(it, ctx)); });
-        if (!items.length) list.appendChild(el('div', 'tv-empty', t('files_none')));
+        bar.appendChild(expand);
+        bar.appendChild(collapse);
+        var list = el('div', 'tv-rounds');
+        rounds.forEach(function(r, i) { list.appendChild(roundBlock(r, i, ctx)); });
+        if (!rounds.length) list.appendChild(el('div', 'tv-empty', t('files_none')));
         expand.onclick = function() { list.querySelectorAll('details.tv-step').forEach(function(d) { d.open = true; }); };
         collapse.onclick = function() { list.querySelectorAll('details.tv-step').forEach(function(d) { d.open = false; }); };
-        wrap.appendChild(actions);
+        wrap.appendChild(bar);
         wrap.appendChild(list);
-        return section(t('tv_process') + ' (' + items.length + ')', true, wrap);
+        return section(t('tv_process'), true, wrap);
     }
 
     function metadata(v, job) {
@@ -443,7 +514,11 @@ var TraceView = (function() {
 
     function viewName(v) {
         if (v.kind === 'trace') return t('tv_trace');
-        if (v.kind === 'turn') return agentLabel(v.ref.agent) + ' · ' + t('tv_turn') + ' #' + v.n;
+        if (v.kind === 'turn') {
+            return agentLabel(v.ref.agent) + (v.next
+                ? ' → ' + v.next.map(function(a) { return agentLabel(a.agent); }).join(', ')
+                : ' · ' + t('tv_turn_final'));
+        }
         return v.ref.name;
     }
 
@@ -469,10 +544,6 @@ var TraceView = (function() {
         var title = el('div', 'tv-detail-title');
         title.appendChild(viewIcon(v));
         title.appendChild(el('span', null, viewName(v)));
-        if (v.kind === 'turn' && v.next) {
-            title.appendChild(el('span', 'tv-arrow', '→'));
-            v.next.forEach(function(a) { title.appendChild(agentChip(a.agent)); });
-        }
         header.appendChild(title);
         var stats = el('div', 'tv-stats');
         stats.appendChild(stat(t('tv_latency'), v.start && v.end ? formatSeconds(seconds(v.start, v.end)) : (v.kind === 'trace' ? '-' : t('trace_running'))));
@@ -578,12 +649,9 @@ var TraceView = (function() {
                 };
                 name.appendChild(caret);
                 name.appendChild(viewIcon(v));
-                var text = el('span', 'tv-label', v.kind === 'turn' ? t('tv_turn') + ' #' + v.n : viewName(v));
+                var text = el('span', 'tv-label', viewName(v));
                 text.title = viewName(v);
                 name.appendChild(text);
-                if (v.kind === 'turn' && v.next) {
-                    name.appendChild(el('span', 'tv-arrow', '→ ' + v.next.map(function(a) { return agentLabel(a.agent); }).join(', ')));
-                }
                 if (v.ref.decision) name.appendChild(decisionBadge(v.ref.decision));
                 if (v.ref.error && v.kind === 'agent') name.appendChild(el('span', 'tv-badge tv-badge-fail', t('tv_error')));
                 if (running && v.kind !== 'trace' && !v.end) name.appendChild(el('span', 'tv-badge tv-badge-warn', t('trace_running')));

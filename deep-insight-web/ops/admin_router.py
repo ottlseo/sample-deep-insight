@@ -184,13 +184,12 @@ def dashboard_page(claims: dict = Depends(require_admin)):
     return HTMLResponse(html_path.read_text())
 
 
-@admin_router.get("/dashboard/{job_id}", response_class=HTMLResponse)
+@admin_router.get("/dashboard/{job_id}")
 def job_detail_page(job_id: str, claims: dict = Depends(require_admin)):
-    """Serve the job detail page."""
-    html_path = OPS_STATIC_DIR / "job.html"
-    if not html_path.exists():
-        return HTMLResponse("<h1>Job detail page not deployed yet</h1>", status_code=503)
-    return HTMLResponse(html_path.read_text())
+    """Old job page URL: the job list opens the job in its side panel."""
+    if not _SAFE_ID.match(job_id):
+        raise HTTPException(status_code=404)
+    return RedirectResponse(f"/admin/dashboard?job={job_id}")
 
 
 @admin_router.get("/api/jobs")
