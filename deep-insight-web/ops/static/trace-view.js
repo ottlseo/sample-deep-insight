@@ -670,7 +670,30 @@ var TraceView = (function() {
             renderDetail(detailPane, byId[state.selected], ctx);
         }
 
+        // Drag the divider to resize the tree against the detail; kept for next time
+        var divider = el('div', 'tv-divider');
+        var treeShare = parseFloat(localStorage.getItem('opsTreeShare')) || 50;
+        view.style.gridTemplateColumns = 'minmax(0, ' + treeShare + 'fr) 8px minmax(0, ' + (100 - treeShare) + 'fr)';
+        divider.addEventListener('pointerdown', function(e) {
+            e.preventDefault();
+            divider.setPointerCapture(e.pointerId);
+            divider.classList.add('dragging');
+            document.body.classList.add('resizing');
+        });
+        divider.addEventListener('pointermove', function(e) {
+            if (!divider.classList.contains('dragging')) return;
+            var box = view.getBoundingClientRect();
+            treeShare = Math.max(25, Math.min(75, (e.clientX - box.left) / box.width * 100));
+            view.style.gridTemplateColumns = 'minmax(0, ' + treeShare + 'fr) 8px minmax(0, ' + (100 - treeShare) + 'fr)';
+        });
+        divider.addEventListener('pointerup', function(e) {
+            divider.releasePointerCapture(e.pointerId);
+            divider.classList.remove('dragging');
+            document.body.classList.remove('resizing');
+            localStorage.setItem('opsTreeShare', treeShare.toFixed(1));
+        });
         view.appendChild(treePane);
+        view.appendChild(divider);
         view.appendChild(detailPane);
         container.appendChild(view);
         draw();

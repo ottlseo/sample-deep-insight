@@ -177,6 +177,17 @@
             z-index: 21;
         }
         .drawer.open { transform: none; }
+        .drawer-resize {
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            left: -4px;
+            width: 8px;
+            cursor: col-resize;
+            z-index: 1;
+        }
+        .drawer-resize:hover, .drawer-resize.dragging { background: rgba(74, 124, 255, 0.35); }
+        body.resizing { cursor: col-resize; user-select: none; }
         .drawer-header {
             display: flex;
             align-items: center;
@@ -264,6 +275,7 @@
 
     <div class="drawer-backdrop" id="drawerBackdrop" onclick="closeDrawer()"></div>
     <aside class="drawer" id="drawer" aria-hidden="true">
+        <div class="drawer-resize" id="drawerResize" title="Drag to resize"></div>
         <div class="drawer-header" id="drawerHeader"></div>
         <div class="drawer-tabs" id="drawerTabs"></div>
         <div class="drawer-body" id="drawerBody"></div>
@@ -528,6 +540,33 @@
             await fetchJobs();
             if (drawerJobId) { renderDrawerHeader(); loadDrawerTrace(); loadDrawerFiles(); }
         }
+
+        // Drag the panel's left edge to resize it; the width is kept for next time
+        (function() {
+            var drawer = document.getElementById('drawer');
+            var handle = document.getElementById('drawerResize');
+            var saved = parseInt(localStorage.getItem('opsDrawerWidth'), 10);
+            if (saved) drawer.style.width = Math.min(saved, window.innerWidth - 60) + 'px';
+            handle.addEventListener('pointerdown', function(e) {
+                e.preventDefault();
+                handle.setPointerCapture(e.pointerId);
+                handle.classList.add('dragging');
+                document.body.classList.add('resizing');
+                drawer.style.transition = 'none';
+            });
+            handle.addEventListener('pointermove', function(e) {
+                if (!handle.classList.contains('dragging')) return;
+                var width = Math.max(520, Math.min(window.innerWidth - 60, window.innerWidth - e.clientX));
+                drawer.style.width = width + 'px';
+            });
+            handle.addEventListener('pointerup', function(e) {
+                handle.releasePointerCapture(e.pointerId);
+                handle.classList.remove('dragging');
+                document.body.classList.remove('resizing');
+                drawer.style.transition = '';
+                localStorage.setItem('opsDrawerWidth', parseInt(drawer.style.width, 10));
+            });
+        })();
 
         document.addEventListener('keydown', function(e) {
             if (e.key === 'Escape' && drawerJobId) closeDrawer();
