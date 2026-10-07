@@ -601,7 +601,9 @@ def agentcore_sse_generator(query: str, data_directory: str, upload_id: str = ""
         return
 
     client = get_agentcore_client()
-    payload = json.dumps({"prompt": query, "data_directory": data_directory})
+    # job_id lets the runtime report the job's final status to the ops Lambda
+    # itself, so the record settles even if this stream is cut off.
+    payload = json.dumps({"prompt": query, "data_directory": data_directory, "job_id": upload_id})
 
     logger.info(f"Invoking AgentCore: query={query[:80]}...")
 

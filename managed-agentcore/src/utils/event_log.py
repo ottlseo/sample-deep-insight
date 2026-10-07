@@ -1,0 +1,164 @@
+"""
+Event log: the full agent trace of one request, for the ops dashboard.
+
+The response stream carries only STREAM_EVENT_TYPES (agentcore_runtime.py);
+tool calls and their results never leave the runtime. This log records every
+graph event before that filter, in a compact form:
+  - consecutive text / reasoning chunks of one agent become one record
+  - the streamed updates of one tool call collapse to its final input
+  - string fields are capped at MAX_FIELD_CHARS
+Records are appended to a local file as they complete, so memory stays flat
+however long the run is. The file is uploaded once, at teardown.
+
+Record kinds (one JSON object per line, in order):
+  input        prompt, data_directory, job_id, request_id
+  text         agent response text
+  reasoning    agent reasoning text
+  tool_use     tool, tool_id, input (parsed JSON when possible)
+  tool_result  tool, tool_id, output
+  usage        model_id and token counts of one agent invocation
+  plan_review  plan shown to the user, revision_count
+"""
+
+import json
+import logging
+import os
+import tempfile
+from datetime import datetime
+from typing import Any, Dict, Optional
+
+logger = logging.getLogger(__name__)
+
+MAX_FIELD_CHARS = 50_000
+
+
+def _now() -> str:
+    return datetime.now().isoformat()
+
+
+def _cap(value: Any) -> Any:
+    """Cap every string inside value at MAX_FIELD_CHARS."""
+    if isinstance(value, str):
+        if len(value) <= MAX_FIELD_CHARS:
+            return value
+        return value[:MAX_FIELD_CHARS] + f"\n... [{len(value) - MAX_FIELD_CHARS:,} more chars]"
+    if isinstance(value, dict):
+        return {k: _cap(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_cap(v) for v in value]
+    return value
+
+
+def _parse_tool_input(raw: Any) -> Any:
+    """Streamed tool input is the JSON text received so far; parse it when complete."""
+    if isinstance(raw, str):
+        try:
+            return json.loads(raw)
+        except ValueError:
+            return raw
+    return raw
+
+
+class EventLog:
+    def __init__(self, request_id: str):
+        self.path = os.path.join(tempfile.gettempdir(), f"events_{request_id}.jsonl")
+        self._file = open(self.path, "w", encoding="utf-8")
+        self._seq = 0
+        self._pending: Optional[Dict[str, Any]] = None
+
+    def record_input(self, **fields) -> None:
+        self._write({"kind": "input", "ts": _now(), **fields})
+
+    def add(self, event: Dict[str, Any]) -> None:
+        """Record one graph event. Never raises: the trace must not break a run."""
+        try:
+            self._add(event)
+        except Exception as e:
+            logger.warning(f"Event log: skipped an event ({e})")
+
+    def _add(self, event: Dict[str, Any]) -> None:
+        kind = event.get("event_type") or event.get("type")
+        agent = event.get("agent_name", "")
+        ts = event.get("timestamp") or _now()
+        pending = self._pending
+
+        if kind in ("text_chunk", "reasoning"):
+            record_kind = "text" if kind == "text_chunk" else "reasoning"
+            text = str((event.get("data") if kind == "text_chunk" else event.get("reasoning_text")) or "")
+            if pending and pending["kind"] == record_kind and pending["agent"] == agent:
+                pending["text"] += text
+                pending["end_ts"] = ts
+                return
+            self._flush()
+            self._pending = {"kind": record_kind, "agent": agent, "ts": ts, "end_ts": ts, "text": text}
+
+        elif kind == "tool_use":
+            tool_id = event.get("tool_id")
+            if pending and pending["kind"] == "tool_use" and pending["tool_id"] == tool_id:
+                pending["input"] = event.get("tool_input")
+                return
+            self._flush()
+            self._pending = {
+                "kind": "tool_use", "agent": agent, "ts": ts,
+                "tool": event.get("tool_name", ""), "tool_id": tool_id,
+                "input": event.get("tool_input"),
+            }
+
+        elif kind == "tool_result":
+            self._flush()
+            self._write({
+                "kind": "tool_result", "agent": agent, "ts": ts,
+                "tool": event.get("tool_name", ""), "tool_id": event.get("tool_id"),
+                "output": event.get("output", ""),
+            })
+
+        # Two usage events exist per agent: one per model call from the stream
+        # (no model_id) and one per invocation from the agent's metrics. Keep
+        # only the latter so tokens aren't counted twice.
+        elif kind == "usage_metadata" and "model_id" in event:
+            self._flush()
+            self._write({
+                "kind": "usage", "agent": agent, "ts": ts,
+                "model_id": event.get("model_id"),
+                "input_tokens": event.get("input_tokens", 0),
+                "output_tokens": event.get("output_tokens", 0),
+                "cache_read_input_tokens": event.get("cache_read_input_tokens", 0),
+                "cache_write_input_tokens": event.get("cache_write_input_tokens", 0),
+            })
+
+        elif kind == "plan_review_request":
+            self._flush()
+            self._write({
+                "kind": "plan_review", "agent": "plan_reviewer", "ts": ts,
+                "plan": event.get("plan", ""),
+                "revision_count": event.get("revision_count", 0),
+            })
+
+    def _flush(self) -> None:
+        if self._pending is None:
+            return
+        record, self._pending = self._pending, None
+        if record["kind"] == "tool_use":
+            record["input"] = _parse_tool_input(record["input"])
+        self._write(record)
+
+    def _write(self, record: Dict[str, Any]) -> None:
+        self._seq += 1
+        line = json.dumps({"seq": self._seq, **_cap(record)}, ensure_ascii=False, default=str)
+        self._file.write(line + "\n")
+
+    def close(self) -> None:
+        """Flush the last record and close the file. Safe to call twice."""
+        if self._file.closed:
+            return
+        try:
+            self._flush()
+        finally:
+            self._file.close()
+
+    def discard(self) -> None:
+        self.close()
+        try:
+            os.remove(self.path)
+        except OSError:
+            pass

@@ -104,6 +104,7 @@ from src.utils.agentcore_observability import set_session_context, add_span_even
 
 # Import event queue for unified event processing
 from src.utils.event_queue import clear_queue
+from src.utils.event_log import EventLog
 
 # Import Fargate session manager for cleanup
 from src.tools.global_fargate_coordinator import get_global_session
@@ -252,7 +253,23 @@ def _print_token_usage_summary() -> None:
     shared_state = _global_node_states.get('shared', {})
     TokenTracker.print_summary(shared_state)
 
-def _save_token_usage_to_s3(request_id: str) -> None:
+def _get_output_session_id(request_id: str) -> str:
+    """
+    Return the session ID whose S3 folder holds this request's outputs.
+
+    Falls back to request_id when no Fargate session was created (e.g. the
+    Coordinator answered directly). Must be called before the session is
+    cleaned up.
+    """
+    fargate_manager = get_global_session()
+    if request_id in fargate_manager._sessions:
+        session_id = fargate_manager._sessions[request_id]['session_id']
+        if session_id:
+            return session_id
+    print(f"⚠️ No session ID found for request {request_id}, using request_id as fallback", flush=True)
+    return request_id
+
+def _save_token_usage_to_s3(request_id: str, job_id: str = None) -> None:
     """
     Save token usage statistics directly to S3.
 
@@ -262,11 +279,12 @@ def _save_token_usage_to_s3(request_id: str) -> None:
 
     Args:
         request_id (str): Request identifier to retrieve session ID
+        job_id (str): Ops job ID from the payload. Its presence in the JSON tells
+            the ops Lambda that job_status.json reports this job, not this file.
     """
     import json
     from datetime import datetime
     from src.graph.nodes import _global_node_states
-    from src.tools.global_fargate_coordinator import get_global_session
     import boto3
 
     shared_state = _global_node_states.get('shared', {})
@@ -276,16 +294,7 @@ def _save_token_usage_to_s3(request_id: str) -> None:
         print(f"⚠️ No token usage data to save for request {request_id}", flush=True)
         return
 
-    # Get session ID from Fargate session manager
-    fargate_manager = get_global_session()
-    session_id = None
-
-    if request_id in fargate_manager._sessions:
-        session_id = fargate_manager._sessions[request_id]['session_id']
-
-    if not session_id:
-        print(f"⚠️ No session ID found for request {request_id}, using request_id as fallback", flush=True)
-        session_id = request_id
+    session_id = _get_output_session_id(request_id)
 
     timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
@@ -293,6 +302,7 @@ def _save_token_usage_to_s3(request_id: str) -> None:
     json_data = {
         "session_id": session_id,
         "request_id": request_id,
+        "job_id": job_id,
         "timestamp": timestamp,
         "summary": {
             "total_tokens": token_usage.get('total_tokens', 0),
@@ -432,6 +442,77 @@ def _save_token_usage_to_s3(request_id: str) -> None:
 
     except Exception as e:
         print(f"⚠️ Failed to upload token usage to S3: {e}", flush=True)
+
+def _save_job_report_to_s3(request_id: str, job_id: str, event_log: EventLog, status: str, error: str = "") -> None:
+    """
+    Upload the agent trace and the job's final status for the ops dashboard.
+
+    Uploads, in this order:
+    - s3://{bucket}/deep-insight/fargate_sessions/{session_id}/output/events.jsonl
+    - s3://{bucket}/deep-insight/fargate_sessions/{session_id}/output/job_status.json
+
+    job_status.json triggers the ops Lambda, which updates the job record by
+    job_id. That keeps the recorded status independent of the browser: it is
+    written even if nobody is reading the response stream anymore. Uploaded
+    last so the trace and token usage are already in S3 when the Lambda runs.
+    Must be called before the Fargate session is cleaned up.
+
+    Args:
+        request_id (str): Request identifier to retrieve session ID
+        job_id (str): Ops job ID from the payload (None outside the Web UI)
+        event_log (EventLog): Trace recorded during the run
+        status (str): "Success" or "Failed"
+        error (str): Failure description
+    """
+    import json
+    import time
+    import boto3
+
+    s3_bucket = os.getenv('S3_BUCKET_NAME')
+    if not s3_bucket:
+        print(f"⚠️ S3_BUCKET_NAME not set, skipping job report upload", flush=True)
+        event_log.discard()
+        return
+
+    try:
+        session_id = _get_output_session_id(request_id)
+        s3_prefix = f"deep-insight/fargate_sessions/{session_id}/output/"
+        s3_client = boto3.client('s3', region_name=os.getenv('AWS_REGION', 'us-east-1'))
+
+        trace_key = f"{s3_prefix}events.jsonl"
+        event_log.close()
+        s3_client.upload_file(event_log.path, s3_bucket, trace_key,
+                              ExtraArgs={'ContentType': 'application/x-ndjson'})
+        print(f"✅ Agent trace uploaded to S3: s3://{s3_bucket}/{trace_key}", flush=True)
+
+        status_key = f"{s3_prefix}job_status.json"
+        s3_client.put_object(
+            Bucket=s3_bucket,
+            Key=status_key,
+            Body=json.dumps({
+                "job_id": job_id,
+                "session_id": session_id,
+                "request_id": request_id,
+                "status": status,
+                "error": error[:1000],
+                "ended_at": int(time.time()),
+                "trace_path": trace_key,
+            }, ensure_ascii=False),
+            ContentType='application/json'
+        )
+        print(f"✅ Job status ({status}) uploaded to S3: s3://{s3_bucket}/{status_key}", flush=True)
+    except Exception as e:
+        print(f"⚠️ Failed to upload job report to S3: {e}", flush=True)
+    finally:
+        event_log.discard()
+
+def _describe_failure(error: BaseException) -> str:
+    """Failure message for job_status.json."""
+    if isinstance(error, GeneratorExit):
+        return "Response stream closed before the run finished (client disconnected)"
+    if isinstance(error, asyncio.CancelledError):
+        return "Run cancelled before it finished"
+    return f"{type(error).__name__}: {error}"
 
 def _generate_request_id() -> str:
     """
@@ -645,12 +726,25 @@ async def agentcore_streaming_execution(
     request_id = _generate_request_id()
     _setup_fargate_context(request_id)
     user_query = _extract_user_query(payload)
+    job_id = payload.get("job_id")
+
+    # Full agent trace for the ops dashboard, including the tool events that
+    # STREAM_EVENT_TYPES keeps out of the response stream.
+    event_log = EventLog(request_id)
+    event_log.record_input(
+        prompt=user_query,
+        data_directory=payload.get("data_directory"),
+        job_id=job_id,
+        request_id=request_id,
+    )
 
     context_token = set_session_context(AGENTCORE_SESSION_NAME)
 
     # The final event is held back until teardown finishes -- see Step 5 below.
     final_event = None
     cleanup_done = False
+    report_saved = False
+    failure = ""
 
     try:
         # Step 3: Setup observability tracing
@@ -673,6 +767,7 @@ async def agentcore_streaming_execution(
             streamed_count = 0
             async for event in graph.stream_async(graph_input):
                 event_count += 1
+                event_log.add(event)
                 # Stream small/medium events as keepalives
                 if event.get("type") in STREAM_EVENT_TYPES:
                     streamed_count += 1
@@ -696,8 +791,10 @@ async def agentcore_streaming_execution(
             _print_conversation_history()
             _print_token_usage_summary()
 
-            # Step 6.5: Save token usage directly to S3
-            _save_token_usage_to_s3(request_id)
+            # Step 6.5: Save token usage, then the trace and final status, to S3
+            _save_token_usage_to_s3(request_id, job_id)
+            _save_job_report_to_s3(request_id, job_id, event_log, "Success")
+            report_saved = True
 
             print("=== AgentCore Runtime Event Stream Complete ===")
 
@@ -709,7 +806,7 @@ async def agentcore_streaming_execution(
             })
 
             # Step 8: Tear down the Fargate session while the response stream is
-            # still open. Must come after _save_token_usage_to_s3, which needs
+            # still open. Must come after the S3 saves in Step 6.5, which need
             # the session that cleanup drops.
             _cleanup_request_session(request_id)
             cleanup_done = True
@@ -719,9 +816,20 @@ async def agentcore_streaming_execution(
             if final_event is not None:
                 yield final_event
 
+    except BaseException as e:
+        # BaseException, not Exception: a client disconnect arrives as
+        # GeneratorExit and a cancelled run as CancelledError, and both must
+        # still be recorded as failures.
+        failure = _describe_failure(e)
+        raise
     finally:
         # Cleanup normally ran in Step 8 above; this covers the paths that never
         # reached it (an exception mid-stream, or the client disconnecting).
+        # The failure report goes first: it needs the session cleanup drops.
+        if not report_saved:
+            _save_token_usage_to_s3(request_id, job_id)
+            _save_job_report_to_s3(request_id, job_id, event_log, "Failed",
+                                   failure or "Run ended before completion")
         if not cleanup_done:
             _cleanup_request_session(request_id)
         otel_context.detach(context_token)
