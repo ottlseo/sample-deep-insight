@@ -85,7 +85,7 @@ const adminI18n = {
         trace_loading: 'Loading trace...',
         trace_unavailable: 'No trace recorded for this job. Jobs that ran before trace recording, or are still running, have none.',
         trace_load_error: 'Failed to load trace',
-        trace_hint: 'Steps in execution order. Click a step to see what the agent did.',
+        trace_hint: 'Steps in execution order. Select a step to see what the agent did.',
         trace_steps: 'steps',
         trace_tools: 'tool calls',
         trace_text: 'Response',
@@ -94,6 +94,7 @@ const adminI18n = {
         trace_tool_result: 'Tool result',
         trace_plan: 'Plan shown for review',
         trace_tokens: 'Tokens',
+        trace_tokens_short: 'tokens',
         trace_code: 'Code',
         trace_output: 'Output',
         trace_status: 'Status',
@@ -118,6 +119,9 @@ const adminI18n = {
         files_none: 'None',
         files_download_report: 'Download report',
         files_load_error: 'Failed to load files',
+        files_results: 'Result files',
+        files_all: 'All generated files',
+        files_report_badge: 'Report',
     },
     ko: {
         // Shared header
@@ -204,7 +208,7 @@ const adminI18n = {
         trace_loading: '실행 기록을 불러오는 중...',
         trace_unavailable: '이 작업에는 실행 기록이 없습니다. 실행 기록 저장 이전에 실행되었거나 아직 진행 중인 작업입니다.',
         trace_load_error: '실행 기록을 불러오지 못했습니다',
-        trace_hint: '실행 순서대로 표시됩니다. 단계를 클릭하면 에이전트가 한 일을 볼 수 있습니다.',
+        trace_hint: '실행 순서대로 표시됩니다. 단계를 선택하면 에이전트가 한 일을 볼 수 있습니다.',
         trace_steps: '단계',
         trace_tools: '도구 호출',
         trace_text: '응답',
@@ -213,6 +217,7 @@ const adminI18n = {
         trace_tool_result: '도구 결과',
         trace_plan: '검토 요청된 계획',
         trace_tokens: '토큰',
+        trace_tokens_short: '토큰',
         trace_code: '코드',
         trace_output: '출력',
         trace_status: '상태',
@@ -237,6 +242,9 @@ const adminI18n = {
         files_none: '없음',
         files_download_report: '보고서 다운로드',
         files_load_error: '파일을 불러오지 못했습니다',
+        files_results: '결과 파일',
+        files_all: '생성된 전체 파일',
+        files_report_badge: '보고서',
     }
 };
 
