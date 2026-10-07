@@ -60,7 +60,7 @@ var TraceView = (function() {
     function formatClock(iso) {
         var d = new Date(iso);
         if (isNaN(d)) return '-';
-        return d.toLocaleTimeString([], { hour12: false });
+        return [d.getHours(), d.getMinutes(), d.getSeconds()].map(function(n) { return String(n).padStart(2, '0'); }).join(':');
     }
 
     function preview(value, length) {
@@ -311,16 +311,31 @@ var TraceView = (function() {
         return textBlock(value, 'tv-pre');
     }
 
-    // Code interpreter tools return "status||code||stdout"
-    function splitResult(output) {
-        var parts = typeof output === 'string' ? output.split('||') : [];
-        return parts.length === 3 ? { status: parts[0], stdout: parts[2] } : null;
+    // Tool results, by tool (src/tools/):
+    //   python             "Successfully executed:\n||<code>||<stdout>" | "Failed to execute. Error: ..."
+    //   bash               "<cmd>||<stdout>" | "Error executing command: ..."
+    //   write_and_execute  "✓ Written ...\n✓ Execution successful\nOutput: ..." | "✗ Execution failed: ..."
+    //   Fargate debug log  "<completed|failed>||<code>||<stdout>"
+    // Failure markers: the result's first line, a "✗" step line, or a Python traceback
+    var FAILED_FIRST_LINE = /^(✗|failed to execute|error executing|error:)/i;
+    var FAILED_ANYWHERE = /^✗ |Traceback \(most recent call last\)/m;
+
+    function toolStatus(call) {
+        if (!call.end) return null;
+        var out = typeof call.output === 'string' ? call.output : JSON.stringify(call.output == null ? '' : call.output);
+        var parts = out.split('||');
+        if (parts.length === 3 && /^\s*(completed|success)/i.test(parts[0])) return 'ok';
+        if (parts.length === 3 && /^\s*(failed|error)/i.test(parts[0])) return 'failed';
+        var head = out.slice(0, 4000);
+        var first = head.trim().split('\n')[0];
+        return FAILED_FIRST_LINE.test(first) || FAILED_ANYWHERE.test(head) ? 'failed' : 'ok';
     }
 
-
+    // The part of a tool result worth reading: stdout when the result also echoes the code or command
     function toolOutput(output) {
-        var r = splitResult(output);
-        return r ? el('div', 'tv-pre', r.stdout || '-') : valueBlock(output);
+        var parts = typeof output === 'string' ? output.split('||') : [];
+        if (parts.length >= 2) return el('div', 'tv-pre', parts[parts.length - 1] || '-');
+        return valueBlock(output);
     }
 
     // ---------- Process: waterfall ----------
@@ -349,22 +364,21 @@ var TraceView = (function() {
                 row.kind = 'returned';
                 row.key = 'b' + back.id;
                 row.start = row.end = back.end;
-                row.label = '↩';
+                row.label = '↩ ' + t('wf_result');
                 row.name = back.name;
                 row.agents = subAgents(back);
                 row.text = preview(back.output, 100);
                 prevCall = true;
             } else {
                 var call = it.tool || it.delegate;
-                var result = splitResult(call.output);
                 row.kind = it.delegate ? 'delegate' : 'tool';
                 row.key = 'c' + call.id;
                 row.start = call.start;
                 row.end = call.end;
-                row.label = '⚙';
+                row.label = '⚙ ' + t('wf_tool');
                 row.name = call.name;
                 row.agents = subAgents(call);
-                row.status = result ? result.status : null;
+                row.status = it.delegate ? null : toolStatus(call);
                 row.text = preview(call.input && typeof call.input === 'object'
                     ? (call.input.code || call.input.task || call.input) : call.input, 100);
                 prevCall = true;
@@ -375,9 +389,10 @@ var TraceView = (function() {
         return rows;
     }
 
-    function clock(fromIso, toIso) {
+    function offset(fromIso, toIso) {
         var s = Math.max(0, Math.round(seconds(fromIso, toIso)));
-        return '+' + String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0');
+        var h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60;
+        return '+' + (h ? h + ':' : '') + String(m).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0');
     }
 
     function rowDetail(box, row, ctx) {
@@ -393,7 +408,7 @@ var TraceView = (function() {
             head.appendChild(el('span', 'wf-agent', (row.kind === 'returned' ? '← ' : '→ ') +
                 row.agents.map(function(a) { return agentLabel(a.agent); }).join(', ')));
         }
-        if (row.status) head.appendChild(el('span', 'tv-badge ' + (row.status === 'completed' ? 'tv-badge-ok' : 'tv-badge-fail'), row.status));
+        if (row.status) head.appendChild(el('span', 'tv-badge ' + (row.status === 'ok' ? 'tv-badge-ok' : 'tv-badge-fail'), row.status));
         if (row.start && row.end && row.kind !== 'returned') head.appendChild(el('span', 'wf-dim', formatSeconds(seconds(row.start, row.end))));
         box.appendChild(head);
 
@@ -409,7 +424,7 @@ var TraceView = (function() {
         var tabs = [['input', t('tv_input')]];
         if (!it.delegate) tabs.push(['output', t('tv_output')]);
         var tabKey = 'tab:' + row.key;
-        var current = ctx.state.open[tabKey] || (row.status && row.status !== 'completed' ? 'output' : 'input');
+        var current = ctx.state.open[tabKey] || (row.status === 'failed' ? 'output' : 'input');
         var bar = el('div', 'wf-tabs');
         var body = el('div');
         function show(name) {
@@ -434,7 +449,7 @@ var TraceView = (function() {
     function processSection(items, ctx, v) {
         var rows = rowsOf(items);
         var calls = rows.filter(function(r) { return r.kind === 'tool' || r.kind === 'delegate'; });
-        var failed = rows.filter(function(r) { return r.status && r.status !== 'completed'; });
+        var failed = rows.filter(function(r) { return r.status === 'failed'; });
         var texts = rows.filter(function(r) { return r.kind === 'text'; });
         var spanStart = Date.parse(v.start || (rows[0] && rows[0].start));
         var spanEnd = v.end ? Date.parse(v.end) : Math.max.apply(null, rows.map(function(r) { return Date.parse(r.end || r.start) || 0; }).concat([Date.now()]));
@@ -454,7 +469,7 @@ var TraceView = (function() {
         var table = el('div', 'wf-table');
         var head = el('div', 'wf-row wf-head');
         [t('wf_time'), t('wf_kind'), t('wf_name'), t('wf_status'), t('tv_latency')].forEach(function(h, i) {
-            head.appendChild(el('span', i >= 3 ? 'wf-num' : null, h));
+            head.appendChild(el('span', i === 3 ? 'wf-status' : i === 4 ? 'wf-num' : null, h));
         });
         var scale = el('span', 'wf-scale');
         scale.appendChild(el('span', null, '0s'));
@@ -482,7 +497,9 @@ var TraceView = (function() {
             shown.forEach(function(row) {
                 var line = el('div', 'wf-row wf-k-' + row.kind + (row.roundStart && !onlyFailed ? ' wf-round' : '') +
                     (ctx.state.open[selKey] === row.key ? ' selected' : ''));
-                line.appendChild(el('span', 'wf-time', row.start ? clock(new Date(spanStart).toISOString(), row.start) : ''));
+                var time = el('span', 'wf-time', row.start ? formatClock(row.start) : '');
+                if (row.start) time.title = offset(new Date(spanStart).toISOString(), row.start);
+                line.appendChild(time);
                 line.appendChild(el('span', 'wf-kind', row.label));
                 var name = el('span', 'wf-name');
                 if (row.name) name.appendChild(el('span', 'wf-tool', row.name));
@@ -492,13 +509,13 @@ var TraceView = (function() {
                 }
                 name.appendChild(el('span', 'wf-text', row.text || ''));
                 line.appendChild(name);
-                line.appendChild(el('span', 'wf-num ' + (row.status ? (row.status === 'completed' ? 'wf-ok' : 'wf-fail') : 'wf-dim'),
-                    row.status ? (row.status === 'completed' ? 'ok' : row.status) : (row.kind === 'tool' || row.kind === 'delegate') && !row.end ? '…' : ''));
+                line.appendChild(el('span', 'wf-status ' + (row.status ? 'wf-' + row.status : 'wf-dim'),
+                    row.status || ((row.kind === 'tool' || row.kind === 'delegate') && !row.end ? '…' : '')));
                 line.appendChild(el('span', 'wf-num wf-dim', row.kind === 'returned' ? '' : row.end ? formatSeconds(seconds(row.start, row.end)) : '…'));
                 var track = el('span', 'wf-track');
                 var a = Date.parse(row.start), z = row.end ? Date.parse(row.end) : spanEnd;
                 if (!isNaN(a)) {
-                    var bar = el('span', 'wf-bar wf-bar-' + row.kind + (row.status && row.status !== 'completed' ? ' wf-bar-fail' : ''));
+                    var bar = el('span', 'wf-bar wf-bar-' + row.kind + (row.status === 'failed' ? ' wf-bar-fail' : ''));
                     bar.style.left = Math.max(0, (a - spanStart) / 1000 / total * 100) + '%';
                     bar.style.width = Math.max(0.5, (z - a) / 1000 / total * 100) + '%';
                     track.appendChild(bar);

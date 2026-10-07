@@ -237,10 +237,11 @@ details.tv-step[open] > summary .tv-step-preview { display: none; }
 .wf-table { border: 1px solid var(--border); border-radius: var(--radius-xs); overflow: hidden; background: var(--bg-surface); }
 .wf-row {
     display: grid;
-    grid-template-columns: 3.4rem 1.6rem minmax(0, 1fr) 3.6rem 3.4rem 26%;
-    gap: 0.5rem;
+    /* only the name column grows or shrinks with the panel */
+    grid-template-columns: 4.4rem 4.6rem minmax(6rem, 1fr) 3.4rem 4.2rem 96px;
+    column-gap: 0.75rem;
     align-items: center;
-    padding: 0 0.6rem;
+    padding: 0 0.75rem;
     height: 1.75rem;
     font-size: 0.74rem;
     border-top: 1px solid rgba(42, 47, 58, 0.55);
@@ -264,17 +265,19 @@ details.tv-step[open] > summary .tv-step-preview { display: none; }
 .wf-time, .wf-num { font-family: var(--font-mono); font-size: 0.7rem; }
 .wf-time { color: var(--text-muted); }
 .wf-num { text-align: right; }
-.wf-kind { color: var(--text-muted); text-align: center; }
+.wf-kind { color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wf-status { font-family: var(--font-mono); font-size: 0.7rem; text-align: center; }
+.wf-row > span { min-width: 0; }
 .wf-name { display: flex; align-items: center; gap: 0.5rem; min-width: 0; white-space: nowrap; overflow: hidden; }
 .wf-tool { flex-shrink: 0; font-family: var(--font-mono); font-size: 0.72rem; color: var(--amber); }
 .wf-agent { flex-shrink: 0; font-size: 0.72rem; font-weight: 600; color: var(--text-secondary); }
 .wf-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--text-secondary); }
 .wf-tool ~ .wf-text { color: var(--text-muted); }
-.wf-k-text .wf-kind, .wf-k-reasoning .wf-kind { font-size: 0.66rem; }
+
 .wf-ok { color: var(--green); }
 .wf-fail { color: var(--red); }
 .wf-dim { color: var(--text-muted); }
-.wf-scale { display: flex; justify-content: space-between; font-family: var(--font-mono); text-transform: none; letter-spacing: 0; }
+.wf-scale { display: flex; justify-content: space-between; gap: 0.3rem; font-family: var(--font-mono); text-transform: none; letter-spacing: 0; white-space: nowrap; }
 .wf-track { position: relative; height: 8px; border-radius: 3px; background: rgba(255, 255, 255, 0.035); }
 .wf-bar { position: absolute; top: 0; height: 100%; border-radius: 3px; min-width: 2px; }
 .wf-bar-text { background: #7aa2f7; }
