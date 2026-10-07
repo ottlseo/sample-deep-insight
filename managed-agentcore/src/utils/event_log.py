@@ -8,10 +8,10 @@ graph event before that filter, in a compact form:
   - the streamed updates of one tool call collapse to its final input
   - string fields are capped at MAX_FIELD_CHARS
 Records are appended to a local file as they complete, so memory stays flat
-however long the run is. TraceUploader puts the file to S3 each time an agent
-invocation finishes and once more at teardown, so the dashboard can follow a
-running job and a runtime that dies mid-run still leaves the trace up to the
-last finished agent.
+however long the run is. TraceUploader puts the log to S3 each time an agent
+invocation finishes, every CHECKPOINT_SECONDS while it changes (one agent can
+run for many minutes), and once more at teardown. The dashboard can follow a
+running job, and a runtime that dies mid-run still leaves its trace behind.
 
 Record kinds (one JSON object per line, in order):
   input        prompt, data_directory, job_id, request_id
@@ -25,6 +25,7 @@ Record kinds (one JSON object per line, in order):
                waited_seconds
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -36,6 +37,7 @@ from typing import Any, Dict, Optional
 logger = logging.getLogger(__name__)
 
 MAX_FIELD_CHARS = 50_000
+CHECKPOINT_SECONDS = 30
 
 
 def _now() -> str:
@@ -163,17 +165,34 @@ class EventLog:
         line = json.dumps({"seq": self._seq, **_cap(record)}, ensure_ascii=False, default=str)
         self._file.write(line + "\n")
 
+    @property
+    def version(self):
+        """Changes whenever the log does (new record, or the open record grows)."""
+        pending = self._pending
+        size = len(pending.get("text", "")) if pending else 0
+        return (self._seq, pending is not None, size, str(pending.get("input")) if pending else "")
+
     @staticmethod
     def ends_agent_invocation(event: Dict[str, Any]) -> bool:
         """True for the usage event an agent emits once its invocation finishes."""
         return event.get("event_type") == "usage_metadata" and "model_id" in event
 
     def snapshot(self) -> bytes:
-        """Everything recorded so far, including the record still being merged."""
-        self._flush()
+        """Everything recorded so far, plus the record still being merged.
+
+        The open record is serialized without closing it, so a snapshot taken
+        mid-response doesn't split that response into two records.
+        """
         self._file.flush()
         with open(self.path, "rb") as f:
-            return f.read()
+            data = f.read()
+        if self._pending is not None:
+            record = dict(self._pending)
+            if record["kind"] == "tool_use":
+                record["input"] = _parse_tool_input(record["input"])
+            line = json.dumps({"seq": self._seq + 1, **_cap(record)}, ensure_ascii=False, default=str)
+            data += (line + "\n").encode("utf-8")
+        return data
 
     def close(self) -> None:
         """Flush the last record and close the file. Safe to call twice."""
@@ -206,16 +225,35 @@ class TraceUploader:
         self.bucket = bucket
         self.key = key
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="trace-upload")
+        self._uploaded_version = None
+        self._finished = False
 
     def checkpoint(self) -> None:
-        """Queue an upload of the log as it is now. Never raises."""
+        """Queue an upload of the log as it is now, if it changed. Never raises."""
+        if self._finished:
+            return
         try:
+            version = self.event_log.version
+            if version == self._uploaded_version:
+                return
+            self._uploaded_version = version
             self._executor.submit(self._put, self.event_log.snapshot())
         except Exception as e:
             logger.warning(f"Trace checkpoint skipped ({e})")
 
+    async def checkpoint_periodically(self, interval: float = CHECKPOINT_SECONDS) -> None:
+        """Checkpoint every interval until cancelled.
+
+        Runs on the event loop that feeds the log, so it never reads the log
+        while an event is being added.
+        """
+        while True:
+            await asyncio.sleep(interval)
+            self.checkpoint()
+
     def finish(self) -> bool:
         """Wait for queued uploads, then upload the complete log. True on success."""
+        self._finished = True
         self._executor.shutdown(wait=True)
         self.event_log.close()
         with open(self.event_log.path, "rb") as f:

@@ -370,6 +370,11 @@
         .tl-time { margin-left: auto; font-family: var(--font-mono); font-size: 0.7rem; color: var(--text-muted); }
         .tl-sub { font-size: 0.7rem; color: var(--text-muted); }
         .tl-pane { min-width: 0; }
+        .tl-item.running .tl-dot { animation: pulse 1.6s ease-in-out infinite; }
+        @keyframes pulse {
+            0%, 100% { box-shadow: 0 0 0 3px var(--bg-card), 0 0 0 3px var(--agent-color); }
+            50% { box-shadow: 0 0 0 3px var(--bg-card), 0 0 0 7px transparent; }
+        }
         .tl-pane .step-detail { margin-top: 0; border-top: none; padding-top: 0; }
         .step-detail {
             margin-top: 1.2rem;
@@ -659,6 +664,10 @@
         var currentFiles = null;
         var currentTrace = null;
         var selectedStep = 0;
+        // While a job runs, keep the newest step selected until the user picks another
+        var followLatest = true;
+        // Open/closed state per record (by seq), kept across refreshes
+        var recordOpen = {};
         var timelineScroll = 0;
 
         function jobId() {
@@ -799,10 +808,12 @@
             container.appendChild(all);
         }
 
-        async function fetchFiles() {
+        async function fetchFiles(quiet) {
             var container = document.getElementById('filesSection');
-            sectionShell(container, 'files_title');
-            container.appendChild(el('div', 'section-empty', t('files_loading')));
+            if (!quiet) {
+                sectionShell(container, 'files_title');
+                container.appendChild(el('div', 'section-empty', t('files_loading')));
+            }
             try {
                 var res = await fetch('/admin/api/jobs/' + encodeURIComponent(jobId()) + '/files');
                 var data = await res.json();
@@ -915,7 +926,8 @@
 
         function recordBlock(r, labelNode, previewText, open) {
             var block = el('details', 'record');
-            block.open = open;
+            block.open = r.seq in recordOpen ? recordOpen[r.seq] : open;
+            block.addEventListener('toggle', function() { recordOpen[r.seq] = block.open; });
             var summary = el('summary', 'record-summary');
             summary.appendChild(labelNode);
             if (previewText) summary.appendChild(el('span', 'record-preview', previewText));
@@ -1080,7 +1092,8 @@
             var steps = buildSteps(currentTrace.records);
             var tools = steps.reduce(function(n, s) { return n + s.tools; }, 0);
             sectionShell(container, 'trace_title',
-                steps.length + ' ' + t('trace_steps') + ' · ' + tools + ' ' + t('trace_tools') + ' · ' + t('trace_hint'));
+                steps.length + ' ' + t('trace_steps') + ' · ' + tools + ' ' + t('trace_tools') + ' · ' +
+                (isRunning() ? t('trace_auto_refresh') : t('trace_hint')));
 
             var input = currentTrace.records.find(function(r) { return r.kind === 'input'; });
             if (input && input.prompt) {
@@ -1092,10 +1105,13 @@
             renderHitlSummary(container, currentTrace.records);
 
             var color = function(agent) { return AGENT_COLORS[agent] || 'var(--accent)'; };
+            var running = isRunning();
+            if (running && followLatest) selectedStep = steps.length - 1;
             var select = function(i) {
                 var tl = container.querySelector('.timeline');
                 timelineScroll = tl ? tl.scrollTop : 0;
                 selectedStep = i;
+                followLatest = i === steps.length - 1;
                 renderTrace();
             };
 
@@ -1133,13 +1149,15 @@
             var layout = el('div', 'trace-layout');
             var timeline = el('div', 'timeline');
             steps.forEach(function(step, i) {
-                var item = el('button', 'tl-item' + (i === selectedStep ? ' selected' : ''));
+                var isCurrent = running && i === steps.length - 1;
+                var item = el('button', 'tl-item' + (i === selectedStep ? ' selected' : '') + (isCurrent ? ' running' : ''));
                 item.style.setProperty('--agent-color', color(step.agent));
                 item.appendChild(el('span', 'tl-dot'));
                 var body = el('span', 'tl-body');
                 var top = el('span', 'tl-top');
                 top.appendChild(el('span', 'tl-agent', agentLabel(step.agent)));
                 if (step.decision) top.appendChild(decisionBadge(step.decision));
+                if (isCurrent) top.appendChild(el('span', 'decision decision-warn', t('trace_running')));
                 top.appendChild(el('span', 'tl-time', formatSeconds(seconds(step.start, step.end))));
                 body.appendChild(top);
                 var sub = ['#' + (i + 1)];
@@ -1158,10 +1176,12 @@
             timeline.scrollTop = timelineScroll;
         }
 
-        async function fetchTrace() {
+        async function fetchTrace(quiet) {
             var container = document.getElementById('traceSection');
-            sectionShell(container, 'trace_title');
-            container.appendChild(el('div', 'section-empty', t('trace_loading')));
+            if (!quiet) {
+                sectionShell(container, 'trace_title');
+                container.appendChild(el('div', 'section-empty', t('trace_loading')));
+            }
             try {
                 var res = await fetch('/admin/api/jobs/' + encodeURIComponent(jobId()) + '/trace');
                 var data = await res.json();
@@ -1172,30 +1192,55 @@
             renderTrace();
         }
 
-        async function fetchJob() {
+        // A running job refreshes itself: the runtime re-uploads the trace as it goes
+        var REFRESH_MS = 15000;
+
+        function isRunning() {
+            return !!currentJob && currentJob.status === 'Start';
+        }
+
+        async function loadJob(quiet) {
             try {
                 var res = await fetch('/admin/api/jobs/' + encodeURIComponent(jobId()));
                 if (res.status === 401) {
                     window.location.href = '/admin/login';
-                    return;
+                    return false;
                 }
                 var data = await res.json();
                 if (data.success) {
                     currentJob = data.job;
                     renderJob(currentJob);
                     document.title = 'Deep Insight — Job ' + (currentJob.status || '');
-                    fetchFiles();
-                    fetchTrace();
-                } else {
+                    return true;
+                }
+                if (!quiet) {
                     var wrapper = document.getElementById('jobDetail');
                     wrapper.className = 'loading';
                     wrapper.textContent = data.error || t('detail_not_found');
                 }
             } catch (e) {
-                var wrapper = document.getElementById('jobDetail');
-                wrapper.className = 'loading';
-                wrapper.textContent = t('detail_load_error');
+                if (!quiet) {
+                    var wrapper = document.getElementById('jobDetail');
+                    wrapper.className = 'loading';
+                    wrapper.textContent = t('detail_load_error');
+                }
             }
+            return false;
+        }
+
+        function scheduleRefresh() {
+            if (isRunning()) setTimeout(refreshRunning, REFRESH_MS);
+        }
+
+        async function refreshRunning() {
+            if (await loadJob(true)) await Promise.all([fetchFiles(true), fetchTrace(true)]);
+            scheduleRefresh();
+        }
+
+        async function fetchJob() {
+            if (!(await loadJob(false))) return;
+            await Promise.all([fetchFiles(), fetchTrace()]);
+            scheduleRefresh();
         }
 
         async function handleLogout() {

@@ -761,6 +761,8 @@ async def agentcore_streaming_execution(
         request_id=request_id,
     )
     trace_uploader = _create_trace_uploader(job_id, request_id, event_log)
+    # Agents can run for many minutes; keep the dashboard's view current meanwhile
+    checkpoint_task = asyncio.create_task(trace_uploader.checkpoint_periodically()) if trace_uploader else None
 
     context_token = set_session_context(AGENTCORE_SESSION_NAME)
 
@@ -857,6 +859,8 @@ async def agentcore_streaming_execution(
         failure = _describe_failure(e)
         raise
     finally:
+        if checkpoint_task:
+            checkpoint_task.cancel()
         # Cleanup normally ran in Step 8 above; this covers the paths that never
         # reached it (an exception mid-stream, or the client disconnecting).
         # Same order as the success path: token usage and session before cleanup,

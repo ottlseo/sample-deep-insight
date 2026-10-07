@@ -93,3 +93,51 @@ def test_discard_removes_file_and_close_is_idempotent(log):
     log.discard()
     import os
     assert not os.path.exists(log.path)
+
+
+def test_snapshot_keeps_open_record_whole(log):
+    log.add(_text("reporter", "Hello"))
+    first = [json.loads(l) for l in log.snapshot().decode().splitlines()]
+    log.add(_text("reporter", " world"))
+    records = _records(log)
+    assert first[-1]["text"] == "Hello"
+    assert [r["text"] for r in records] == ["Hello world"]  # not split by the snapshot
+
+
+class _S3:
+    def __init__(self):
+        self.puts = []
+
+    def put_object(self, Bucket, Key, Body, ContentType=None):
+        self.puts.append(Body.decode())
+
+
+def test_checkpoint_uploads_only_changes_and_stops_after_finish(log):
+    from src.utils.event_log import TraceUploader
+    s3 = _S3()
+    up = TraceUploader(log, s3, "b", "k")
+    log.add(_text("reporter", "a"))
+    up.checkpoint()
+    up.checkpoint()  # unchanged: skipped
+    log.add(_text("reporter", "b"))  # open record grew
+    up.checkpoint()
+    assert up.finish()
+    up.checkpoint()  # after finish: ignored
+    assert [json.loads(p.splitlines()[-1])["text"] for p in s3.puts] == ["a", "ab", "ab"]
+
+
+def test_periodic_checkpoints(log):
+    import asyncio
+    from src.utils.event_log import TraceUploader
+    s3 = _S3()
+    up = TraceUploader(log, s3, "b", "k")
+
+    async def run():
+        task = asyncio.create_task(up.checkpoint_periodically(0.01))
+        log.add(_text("reporter", "long running"))
+        await asyncio.sleep(0.05)
+        task.cancel()
+
+    asyncio.run(run())
+    up.finish()
+    assert len(s3.puts) == 2  # one periodic (then unchanged), one final
