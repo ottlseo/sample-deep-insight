@@ -167,9 +167,9 @@ After login, the dashboard shows all analysis jobs with status, duration, tokens
 
 <img src="img/admin_job_list_page.png" alt="Admin Jobs Dashboard" width="700"/>
 
-Click a row to open the job in a side panel (the URL gets `?job=<id>`, so the link opens it again; Esc closes it). It has two tabs and a report download button:
+Click a row to open the job in a side panel (the URL gets `?job=<id>`, so the link opens it again; Esc closes it). Drag its left edge to resize it, and the divider between the tree and the detail to resize the halves. It has two tabs and a report download button:
 
-- **Trace**: left half, the agents in run order: Coordinator, Planner, plan reviews (HITL, with the user's decision and feedback), and the Supervisor with each sub-agent it ran. The Supervisor's own work between agents shows as `Supervisor → Coder`, `Supervisor → Tracker`, … rows. Each row has a timeline bar, latency and tokens. Right half, the selected agent: its input, its process as numbered rounds (a response, with the tool calls it made branching below it; each opens to show the code and output), its output, and metadata. A running job refreshes every 15 seconds and marks the running agents.
+- **Trace**: left half, the agents in run order: Coordinator, Planner, plan reviews (HITL, with the user's decision and feedback), and the Supervisor with each sub-agent it ran. The Supervisor's own work between agents shows as `Supervisor → Coder`, `Supervisor → Tracker`, … rows. Each row has a timeline bar, latency and tokens. Right half, the selected agent: its input, its process as a waterfall (one row per response or tool call: offset from the agent's start, status, duration and a bar on the agent's timeline; a filter for failed calls; the selected row opens below with input / output tabs), its output, and metadata. A running job refreshes every 15 seconds and marks the running agents.
 - **Files**: input data, result documents (report first), generated images, and every generated file.
 
 Jobs that ran before the runtime recorded traces show files only; jobs from before agent inputs were recorded show "not recorded" as the input.
