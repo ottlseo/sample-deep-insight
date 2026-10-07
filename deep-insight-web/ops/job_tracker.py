@@ -1,10 +1,11 @@
 """
 Job Tracker — DynamoDB write functions for job lifecycle tracking.
 
-Three entry points called from app.py:
+Entry points called from app.py:
   - track_job_start()  : called at /analyze (writes Start record)
   - track_job_link()   : called at workflow_complete (links session_id)
   - track_job_failure() : called on SSE error (writes Failed + SNS notification)
+  - get_job_status()   : called at /jobs/{upload_id}/status (browser lost the stream)
 
 All functions are non-breaking: they skip silently if DYNAMODB_TABLE_NAME is not set,
 and catch all exceptions to never affect the analysis workflow.
@@ -113,6 +114,37 @@ def track_job_failure(upload_id: str, error_message: str):
 
     # Send SNS failure notification (Step 3)
     _notify_failure(upload_id, error_message)
+
+
+def get_job_status(upload_id: str):
+    """Status of a job for a browser that lost its analysis stream.
+
+    The runtime keeps running when the browser's connection drops and reports
+    the final status itself, so the page can follow the job here instead of
+    treating the disconnect as a failure.
+
+    The error message is left out: it can hold raw boto3/IAM text (ARNs,
+    account ID) that stays admin-only, like everywhere else in app.py.
+
+    Returns:
+        {"status", "session_id"}, or None if tracking is not configured or
+        the job is unknown.
+    """
+    table = _get_table()
+    if not table:
+        return None
+
+    try:
+        item = table.get_item(Key={"job_id": upload_id}).get("Item")
+    except Exception as e:
+        logger.warning(f"Job tracking: status read failed: {e}")
+        return None
+    if not item:
+        return None
+    return {
+        "status": item.get("status", ""),
+        "session_id": item.get("session_id", ""),
+    }
 
 
 def _notify_failure(upload_id: str, error_message: str):
