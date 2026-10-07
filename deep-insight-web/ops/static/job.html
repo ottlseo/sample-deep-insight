@@ -614,9 +614,13 @@
                 return;
             }
             var header = sectionShell(container, 'files_title');
-            if (currentJob && currentJob.report_filename && currentJob.session_id) {
+            // Same pick as the Lambda (first .docx); jobs recorded before their
+            // artifacts reached S3 have no report_filename
+            var docx = currentFiles.artifacts.find(function(f) { return f.name.toLowerCase().endsWith('.docx'); });
+            var report = (currentJob && currentJob.report_filename) || (docx && docx.name);
+            if (report) {
                 var btn = el('a', 'btn-primary', t('files_download_report'));
-                btn.href = fileUrl('artifacts', currentJob.report_filename, true);
+                btn.href = fileUrl('artifacts', report, true);
                 header.appendChild(btn);
             }
 

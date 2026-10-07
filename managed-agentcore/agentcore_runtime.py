@@ -262,11 +262,14 @@ def _get_output_session_id(request_id: str) -> str:
     Coordinator answered directly). Must be called before the session is
     cleaned up.
     """
-    fargate_manager = get_global_session()
-    if request_id in fargate_manager._sessions:
-        session_id = fargate_manager._sessions[request_id]['session_id']
-        if session_id:
-            return session_id
+    try:
+        fargate_manager = get_global_session()
+        if request_id in fargate_manager._sessions:
+            session_id = fargate_manager._sessions[request_id]['session_id']
+            if session_id:
+                return session_id
+    except Exception as e:
+        print(f"⚠️ Could not read Fargate session for {request_id}: {e}", flush=True)
     print(f"⚠️ No session ID found for request {request_id}, using request_id as fallback", flush=True)
     return request_id
 
@@ -468,8 +471,8 @@ def _create_trace_uploader(job_id: str, request_id: str, event_log: EventLog):
     s3_client = boto3.client('s3', region_name=os.getenv('AWS_REGION', 'us-east-1'))
     return TraceUploader(event_log, s3_client, s3_bucket, f"{TRACE_PREFIX}{trace_id}/events.jsonl")
 
-def _save_job_report_to_s3(request_id: str, job_id: str, trace_uploader, event_log: EventLog,
-                           status: str, error: str = "") -> None:
+def _save_job_report_to_s3(request_id: str, job_id: str, session_id: str, trace_uploader,
+                           event_log: EventLog, status: str, error: str = "") -> None:
     """
     Upload the complete agent trace, then the job's final status, for the ops dashboard.
 
@@ -479,13 +482,14 @@ def _save_job_report_to_s3(request_id: str, job_id: str, trace_uploader, event_l
 
     job_status.json triggers the ops Lambda, which updates the job record by
     job_id. That keeps the recorded status independent of the browser: it is
-    written even if nobody is reading the response stream anymore. Uploaded
-    last so the trace and token usage are already in S3 when the Lambda runs.
-    Must be called before the Fargate session is cleaned up.
+    written even if nobody is reading the response stream anymore. Call it
+    after the Fargate session is cleaned up, so the artifacts, the trace and
+    token usage are all in S3 when the Lambda runs.
 
     Args:
-        request_id (str): Request identifier to retrieve session ID
+        request_id (str): Request identifier
         job_id (str): Ops job ID from the payload (None outside the Web UI)
+        session_id (str): Session whose output folder gets job_status.json
         trace_uploader (TraceUploader): None if S3 is not configured
         event_log (EventLog): Trace recorded during the run
         status (str): "Success" or "Failed"
@@ -503,7 +507,6 @@ def _save_job_report_to_s3(request_id: str, job_id: str, trace_uploader, event_l
         if trace_uploader.finish():
             print(f"✅ Agent trace uploaded to S3: s3://{trace_uploader.bucket}/{trace_uploader.key}", flush=True)
 
-        session_id = _get_output_session_id(request_id)
         status_key = f"deep-insight/fargate_sessions/{session_id}/output/job_status.json"
         s3_client = boto3.client('s3', region_name=os.getenv('AWS_REGION', 'us-east-1'))
         s3_client.put_object(
@@ -765,6 +768,7 @@ async def agentcore_streaming_execution(
     final_event = None
     cleanup_done = False
     report_saved = False
+    session_id = None
     failure = ""
 
     try:
@@ -815,10 +819,10 @@ async def agentcore_streaming_execution(
             _print_conversation_history()
             _print_token_usage_summary()
 
-            # Step 6.5: Save token usage, then the trace and final status, to S3
+            # Step 6.5: Save token usage directly to S3, and note the session
+            # its outputs live under (cleanup in Step 8 drops it)
             _save_token_usage_to_s3(request_id, job_id)
-            _save_job_report_to_s3(request_id, job_id, trace_uploader, event_log, "Success")
-            report_saved = True
+            session_id = _get_output_session_id(request_id)
 
             print("=== AgentCore Runtime Event Stream Complete ===")
 
@@ -830,10 +834,16 @@ async def agentcore_streaming_execution(
             })
 
             # Step 8: Tear down the Fargate session while the response stream is
-            # still open. Must come after the S3 saves in Step 6.5, which need
-            # the session that cleanup drops.
+            # still open. Must come after Step 6.5, which needs the session that
+            # cleanup drops.
             _cleanup_request_session(request_id)
             cleanup_done = True
+
+            # Step 8.5: Final trace and job status. After cleanup, because cleanup
+            # is when the container uploads the artifacts: the status triggers the
+            # ops Lambda, which lists them for the job record and the report link.
+            _save_job_report_to_s3(request_id, job_id, session_id, trace_uploader, event_log, "Success")
+            report_saved = True
 
             # Step 9: Teardown is finished -- release the final event and end
             # the response.
@@ -849,13 +859,16 @@ async def agentcore_streaming_execution(
     finally:
         # Cleanup normally ran in Step 8 above; this covers the paths that never
         # reached it (an exception mid-stream, or the client disconnecting).
-        # The failure report goes first: it needs the session cleanup drops.
-        if not report_saved:
+        # Same order as the success path: token usage and session before cleanup,
+        # the failure report after it.
+        if not report_saved and session_id is None:
             _save_token_usage_to_s3(request_id, job_id)
-            _save_job_report_to_s3(request_id, job_id, trace_uploader, event_log,
-                                   "Failed", failure or "Run ended before completion")
+            session_id = _get_output_session_id(request_id)
         if not cleanup_done:
             _cleanup_request_session(request_id)
+        if not report_saved:
+            _save_job_report_to_s3(request_id, job_id, session_id, trace_uploader, event_log,
+                                   "Failed", failure or "Run ended before completion")
         otel_context.detach(context_token)
 
 if __name__ == "__main__":

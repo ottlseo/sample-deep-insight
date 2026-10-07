@@ -47,7 +47,9 @@ def s3(monkeypatch, tmp_path):
     monkeypatch.setenv("S3_BUCKET_NAME", "bucket")
     monkeypatch.setattr("boto3.client", lambda *a, **k: fake)
     monkeypatch.setattr(runtime, "_setup_execution", lambda: None)
-    monkeypatch.setattr(runtime, "_cleanup_request_session", lambda request_id: None)
+    # cleanup is when the container uploads artifacts; mark it in the S3 history
+    monkeypatch.setattr(runtime, "_cleanup_request_session",
+                        lambda request_id: fake.history.append(("<cleanup>", "")))
     monkeypatch.setattr(runtime, "_get_output_session_id", lambda request_id: "sess-1")
     monkeypatch.setattr(runtime, "_print_conversation_history", lambda: None)
     monkeypatch.setattr(runtime, "_print_token_usage_summary", lambda: None)
@@ -141,3 +143,15 @@ def test_disconnect_after_success_keeps_success(s3, monkeypatch):
 
     _run(monkeypatch, FakeGraph([TEXT]), consume=read_until_final_then_disconnect)
     assert _status(s3)["status"] == "Success"
+
+
+@pytest.mark.parametrize("error", [None, RuntimeError("boom")])
+def test_job_status_written_after_cleanup(s3, monkeypatch, error):
+    # The Lambda lists artifacts when job_status.json lands; they are uploaded at cleanup
+    try:
+        _run(monkeypatch, FakeGraph([TEXT], error=error))
+    except RuntimeError:
+        pass
+    keys = [key for key, _ in s3.history]
+    assert keys.index("<cleanup>") < keys.index("deep-insight/fargate_sessions/sess-1/output/job_status.json")
+    assert keys.count("<cleanup>") == 1
