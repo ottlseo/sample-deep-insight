@@ -520,6 +520,8 @@ def _save_job_report_to_s3(request_id: str, job_id: str, session_id: str, trace_
                 "error": error[:1000],
                 "ended_at": int(time.time()),
                 "trace_path": trace_uploader.key,
+                # For the dashboard's job list; the full answer is in the trace
+                "output_preview": event_log.last_text.strip()[:500],
             }, ensure_ascii=False),
             ContentType='application/json'
         )

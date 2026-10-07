@@ -141,3 +141,15 @@ def test_periodic_checkpoints(log):
     asyncio.run(run())
     up.finish()
     assert len(s3.puts) == 2  # one periodic (then unchanged), one final
+
+
+def test_agent_start_end_and_last_text(log):
+    log.add({"type": "agent_start", "event_type": "agent_start", "agent_name": "coder", "input": "Load the data"})
+    log.add(_text("coder", "Done: 836 rows"))
+    log.add({"type": "agent_end", "event_type": "agent_end", "agent_name": "coder", "error": None})
+    log.add(_text("supervisor", "  "))  # blank text doesn't replace the answer
+    assert log.last_text == "Done: 836 rows"
+    records = _records(log)
+    assert [r["kind"] for r in records] == ["agent_start", "text", "agent_end", "text"]
+    assert records[0]["input"] == "Load the data" and records[2]["error"] is None
+    assert log.last_text == "Done: 836 rows"

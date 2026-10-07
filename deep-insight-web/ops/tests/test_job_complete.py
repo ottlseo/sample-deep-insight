@@ -79,7 +79,7 @@ def _s3_event(key):
 def _report(lam, status, job_id="job-1", error=""):
     _put(OUTPUT + "job_status.json", {"job_id": job_id, "session_id": SESSION, "status": status,
                                       "error": error, "ended_at": int(time.time()),
-                                      "trace_path": OUTPUT + "events.jsonl"})
+                                      "trace_path": OUTPUT + "events.jsonl", "output_preview": "Top segment: 30s women"})
     lam.handler(_s3_event(OUTPUT + "job_status.json"), None)
 
 
@@ -100,6 +100,7 @@ def test_success_without_session_link(aws):
     assert job["trace_path"] == OUTPUT + "events.jsonl"
     assert job["total_tokens"] == 1500 and job["cache_hit_rate"] == 40
     assert job["report_filename"] == "report.docx"
+    assert job["output_preview"] == "Top segment: 30s women"
     assert aws.sent == ["Deep Insight Job Completed"]
 
 

@@ -15,6 +15,8 @@ running job, and a runtime that dies mid-run still leaves its trace behind.
 
 Record kinds (one JSON object per line, in order):
   input        prompt, data_directory, job_id, request_id
+  agent_start  an agent invocation begins: input (the message the agent got)
+  agent_end    the invocation ended: error (None on success)
   text         agent response text
   reasoning    agent reasoning text
   tool_use     tool, tool_id, input (parsed JSON when possible)
@@ -73,6 +75,7 @@ class EventLog:
         self._file = open(self.path, "w", encoding="utf-8")
         self._seq = 0
         self._pending: Optional[Dict[str, Any]] = None
+        self._last_text = ""
 
     def record_input(self, **fields) -> None:
         self._write({"kind": "input", "ts": _now(), **fields})
@@ -142,6 +145,14 @@ class EventLog:
                 "revision_count": event.get("revision_count", 0),
             })
 
+        elif kind == "agent_start":
+            self._flush()
+            self._write({"kind": "agent_start", "agent": agent, "ts": ts, "input": event.get("input", "")})
+
+        elif kind == "agent_end":
+            self._flush()
+            self._write({"kind": "agent_end", "agent": agent, "ts": ts, "error": event.get("error")})
+
         elif kind == "plan_review_result":
             self._flush()
             self._write({
@@ -152,10 +163,19 @@ class EventLog:
                 "waited_seconds": event.get("waited_seconds", 0),
             })
 
+    @property
+    def last_text(self) -> str:
+        """The most recent agent response text: the run's final answer at the end."""
+        if self._pending and self._pending["kind"] == "text" and self._pending["text"].strip():
+            return self._pending["text"]
+        return self._last_text
+
     def _flush(self) -> None:
         if self._pending is None:
             return
         record, self._pending = self._pending, None
+        if record["kind"] == "text" and record["text"].strip():
+            self._last_text = record["text"]
         if record["kind"] == "tool_use":
             record["input"] = _parse_tool_input(record["input"])
         self._write(record)

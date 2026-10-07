@@ -120,6 +120,7 @@ def _process_job_status(bucket: str, key: str):
         "elapsed_seconds": max(ended_at - started_at, 0),
         "session_id": session_id,
         "trace_path": status_data.get("trace_path", ""),
+        "output_preview": status_data.get("output_preview", ""),
         **stats,
     }
     remove = []
