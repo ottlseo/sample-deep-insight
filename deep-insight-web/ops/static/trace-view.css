@@ -1,10 +1,12 @@
 /* Trace view (trace-view.js): tree + detail. Uses the admin pages' CSS variables. */
 
+/* Fills its container (the side panel's body); tree and detail scroll on their own */
 .tv {
     display: grid;
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
     gap: 1rem;
-    align-items: start;
+    height: 100%;
     min-height: 0;
 }
 @media (max-width: 1000px) { .tv { grid-template-columns: 1fr; } }
@@ -14,7 +16,7 @@
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
     overflow: auto;
-    max-height: var(--tv-height, calc(100vh - 12rem));
+    max-height: 100%;
     background: var(--bg-surface);
 }
 .tv-tree-head, .tv-row {
@@ -107,7 +109,8 @@
 /* ---------- Detail ---------- */
 .tv-detail {
     min-width: 0;
-    max-height: var(--tv-height, calc(100vh - 12rem));
+    padding-bottom: 1.5rem;
+    max-height: 100%;
     overflow: auto;
     padding-right: 0.2rem;
 }
@@ -187,72 +190,56 @@ details.tv-step > summary::before { content: '▸'; color: var(--text-muted); fo
 details.tv-step[open] > summary::before { content: '▾'; }
 details.tv-step > summary:hover, .tv-step-button:hover { color: var(--text-primary); }
 details.tv-step[open] > summary .tv-step-preview { display: none; }
-.tv-step-body { padding: 0 0.7rem 0.7rem; }
-.tv-step-label { margin: 0.5rem 0 0.3rem; font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; }
-.tv-step-actions { display: flex; gap: 1rem; margin-top: 0.5rem; }
 .tv-step-kind { flex-shrink: 0; font-weight: 600; color: var(--text-secondary); }
-.tv-tool-name { flex-shrink: 0; font-family: var(--font-mono); font-size: 0.74rem; color: var(--amber); }
 .tv-step-preview { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); }
-.tv-step-time { flex-shrink: 0; font-family: var(--font-mono); font-size: 0.7rem; color: var(--text-muted); margin-left: auto; }
-.tv-agent-chip {
-    flex-shrink: 0;
-    padding: 0.05rem 0.45rem;
-    border-radius: 999px;
-    font-size: 0.68rem;
-    font-weight: 600;
-    color: var(--agent-color);
-    border: 1px solid var(--agent-color);
-}
 
-/* Rounds: a response, then the tool calls it made, as a small tree */
+/* Process: rounds as a JSON array (devtools-style viewer) */
 .tv-process-actions { align-items: center; }
 .tv-process-summary { margin-right: auto; display: inline-flex; align-items: center; gap: 0.3rem; font-size: 0.75rem; color: var(--text-muted); }
-.tv-rounds { display: flex; flex-direction: column; gap: 0.7rem; }
-.tv-round-head { display: flex; align-items: flex-start; gap: 0.55rem; }
-.tv-round-head > details { flex: 1; min-width: 0; }
-.tv-round-num {
-    flex-shrink: 0;
-    width: 1.5rem;
-    height: 1.5rem;
-    margin-top: 0.35rem;
-    border-radius: 50%;
-    background: var(--bg-elevated);
-    border: 1px solid var(--border-hover);
-    color: var(--text-secondary);
+.jv {
+    background: #0a0c10;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-xs);
+    padding: 0.6rem 0.7rem;
     font-family: var(--font-mono);
-    font-size: 0.7rem;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
+    font-size: 0.74rem;
+    line-height: 1.6;
+    color: var(--text-secondary);
+    overflow-x: auto;
 }
-.tv-round-none { flex: 1; padding: 0.5rem 0; color: var(--text-muted); font-size: 0.78rem; font-style: italic; }
-.tv-round-calls {
-    display: flex;
-    flex-direction: column;
-    gap: 0.3rem;
-    margin: 0.3rem 0 0 0.72rem;
-    padding-left: 1.35rem;
-    border-left: 2px solid var(--border);
+.jv-row { display: block; white-space: nowrap; }
+details.jv-node > summary { list-style: none; cursor: pointer; }
+details.jv-node > summary::-webkit-details-marker { display: none; }
+details.jv-node > summary::before { content: '▸'; display: inline-block; width: 1em; color: var(--text-muted); }
+details.jv-node[open] > summary::before { content: '▾'; }
+details.jv-node > summary:hover { background: rgba(255, 255, 255, 0.03); }
+details.jv-node[open] > summary .jv-preview { display: none; }
+details.jv-node:not([open]) > summary .jv-open, details.jv-node:not([open]) > .jv-close { display: none; }
+.jv-children { margin-left: 0.45em; padding-left: 1.05em; border-left: 1px solid rgba(255, 255, 255, 0.07); }
+.jv-children > .jv-row { padding-left: 1em; }
+.jv-close { padding-left: 1em; color: var(--text-muted); }
+.jv-open, .jv-punct { color: var(--text-muted); }
+.jv-key { color: #7aa2f7; }
+.jv-index { color: var(--text-muted); }
+.jv-preview { color: var(--text-muted); white-space: nowrap; }
+.jv-str { color: #9ece6a; white-space: pre-wrap; }
+.jv-num { color: #ff9e64; }
+.jv-bool { color: #bb9af7; }
+.jv-null { color: var(--text-muted); }
+.jv-ok { color: var(--green); }
+.jv-fail { color: var(--red); }
+.jv-block {
+    margin: 0.15rem 0 0.35rem 1em;
+    padding: 0.45rem 0.6rem;
+    border-left: 2px solid rgba(158, 206, 106, 0.35);
+    background: rgba(255, 255, 255, 0.02);
+    color: #9ece6a;
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 320px;
+    overflow: auto;
 }
-.tv-call { position: relative; }
-.tv-call::before {
-    content: '';
-    position: absolute;
-    left: -1.35rem;
-    top: 1.05rem;
-    width: 1.1rem;
-    border-top: 2px solid var(--border);
-}
-.tv-call:last-child::after {
-    /* end the rail at the last branch */
-    content: '';
-    position: absolute;
-    left: calc(-1.35rem - 2px);
-    top: calc(1.05rem + 2px);
-    bottom: -0.4rem;
-    border-left: 2px solid var(--bg-card);
-}
-.tv-tool-icon { flex-shrink: 0; color: var(--amber); font-size: 0.8rem; }
+.jv-block.code { color: var(--text-primary); border-left-color: rgba(255, 158, 100, 0.45); }
 
 /* JSON tree */
 .json-node > summary { cursor: pointer; font-family: var(--font-mono); font-size: 0.75rem; }

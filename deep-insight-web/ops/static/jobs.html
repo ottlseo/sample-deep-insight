@@ -175,7 +175,6 @@
             transform: translateX(100%);
             transition: transform 0.22s ease;
             z-index: 21;
-            --tv-height: calc(100vh - 7.5rem);
         }
         .drawer.open { transform: none; }
         .drawer-header {
@@ -190,7 +189,7 @@
         .drawer-query { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-secondary); font-size: 0.85rem; }
         .drawer-meta { display: flex; flex-wrap: wrap; gap: 0.3rem 1rem; font-family: var(--font-mono); font-size: 0.72rem; color: var(--text-muted); }
         .drawer-actions { display: flex; gap: 0.5rem; flex-shrink: 0; }
-        .drawer-body { flex: 1; padding: 1rem 1.4rem; overflow: hidden; }
+        .drawer-body { flex: 1; min-height: 0; padding: 1rem 1.4rem; overflow: hidden; }
         .drawer-files { overflow-y: auto; }
         .drawer-tabs { display: flex; gap: 0.2rem; padding: 0 1.4rem; border-bottom: 1px solid var(--border); }
         .drawer-tab {
