@@ -7,6 +7,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/admin/static/trace-view.css">
+    <link rel="stylesheet" href="/admin/static/files-view.css">
     <style>
         :root {
             --bg-deep: #0d0f13;
@@ -190,14 +191,6 @@
         .section-title { font-size: 1.05rem; font-weight: 700; }
         .section-meta { color: var(--text-muted); font-size: 0.85rem; }
         .section-empty { color: var(--text-muted); font-size: 0.9rem; }
-        .subsection-title {
-            color: var(--text-muted);
-            font-size: 0.8rem;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.04em;
-            margin: 1.2rem 0 0.6rem;
-        }
         .btn-primary {
             padding: 0.45rem 1rem;
             background: var(--accent);
@@ -209,86 +202,6 @@
             white-space: nowrap;
         }
         .btn-primary:hover { background: var(--accent-hover); }
-        .image-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-            gap: 0.8rem;
-        }
-        .image-tile {
-            display: block;
-            background: var(--bg-elevated);
-            border: 1px solid var(--border);
-            border-radius: var(--radius-sm);
-            overflow: hidden;
-            text-decoration: none;
-            color: var(--text-muted);
-            transition: border-color 0.2s;
-        }
-        .image-tile:hover { border-color: var(--accent); }
-        .image-tile img { display: block; width: 100%; height: 150px; object-fit: contain; background: #fff; }
-        .image-tile span {
-            display: block;
-            padding: 0.4rem 0.6rem;
-            font-family: var(--font-mono);
-            font-size: 0.72rem;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-        }
-        .result-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-            gap: 0.7rem;
-        }
-        .result-card {
-            display: flex;
-            align-items: center;
-            gap: 0.8rem;
-            padding: 0.7rem 0.9rem;
-            background: var(--bg-elevated);
-            border: 1px solid var(--border);
-            border-radius: var(--radius-sm);
-            text-decoration: none;
-            color: var(--text-primary);
-            transition: border-color 0.2s;
-        }
-        .result-card:hover { border-color: var(--accent); }
-        .result-card.primary { border-color: rgba(74, 124, 255, 0.5); background: var(--accent-glow); }
-        .result-icon {
-            flex-shrink: 0;
-            width: 2.6rem;
-            padding: 0.45rem 0;
-            border-radius: var(--radius-xs);
-            background: #2b579a;
-            color: #fff;
-            font-size: 0.65rem;
-            font-weight: 700;
-            text-align: center;
-            letter-spacing: 0.03em;
-        }
-        .result-meta { display: flex; flex-direction: column; min-width: 0; }
-        .result-meta .file-size { font-size: 0.72rem; }
-        .result-name {
-            font-family: var(--font-mono);
-            font-size: 0.8rem;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-        }
-        details.all-files { margin-top: 0.4rem; }
-        details.all-files > summary { cursor: pointer; }
-        details.all-files > summary::marker { color: var(--text-muted); }
-        .file-row {
-            display: flex;
-            justify-content: space-between;
-            gap: 1rem;
-            padding: 0.4rem 0;
-            border-bottom: 1px solid var(--border);
-            font-family: var(--font-mono);
-            font-size: 0.8rem;
-        }
-        .file-row:last-child { border-bottom: none; }
-        .file-size { color: var(--text-muted); white-space: nowrap; }
     </style>
 </head>
 <body>
@@ -317,6 +230,7 @@
 
     <script src="/admin/static/admin-i18n.js"></script>
     <script src="/admin/static/trace-view.js"></script>
+    <script src="/admin/static/files-view.js"></script>
     <script>
         var currentJob = null;
 
@@ -466,8 +380,6 @@
 
         // ---------- Files ----------
 
-        var IMAGE_EXT = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg'];
-        var RESULT_EXT = ['.docx', '.pdf', '.pptx', '.xlsx'];
         var currentFiles = null;
         var currentTrace = null;
 
@@ -477,20 +389,7 @@
         }
 
         function fileUrl(area, name, download) {
-            var path = name.split('/').map(encodeURIComponent).join('/');
-            return '/admin/api/jobs/' + encodeURIComponent(jobId()) + '/files/' + area + '/' + path +
-                (download ? '?download=true' : '');
-        }
-
-        function isImage(name) {
-            var lower = name.toLowerCase();
-            return IMAGE_EXT.some(function(ext) { return lower.endsWith(ext); });
-        }
-
-        function formatSize(bytes) {
-            if (bytes < 1024) return bytes + ' B';
-            if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
-            return (bytes / 1024 / 1024).toFixed(1) + ' MB';
+            return FilesView.fileUrl(jobId(), area, name, download);
         }
 
         function el(tag, className, text) {
@@ -512,101 +411,18 @@
             return header;
         }
 
-        function renderFileList(container, area, files) {
-            if (!files.length) {
-                container.appendChild(el('div', 'section-empty', t('files_none')));
-                return;
-            }
-            files.forEach(function(f) {
-                var row = el('div', 'file-row');
-                var link = el('a', 'report-link', f.name);
-                link.href = fileUrl(area, f.name, true);
-                row.appendChild(link);
-                row.appendChild(el('span', 'file-size', formatSize(f.size)));
-                container.appendChild(row);
-            });
-        }
-
+        // Rendered by files-view.js
         function renderFiles() {
             var container = document.getElementById('filesSection');
             if (!currentFiles) return;
-            if (currentFiles.error) {
-                sectionShell(container, 'files_title');
-                container.appendChild(el('div', 'section-empty', t('files_load_error')));
-                return;
-            }
             var header = sectionShell(container, 'files_title');
-            // Same pick as the Lambda (first .docx); jobs recorded before their
-            // artifacts reached S3 have no report_filename
-            var docx = currentFiles.artifacts.find(function(f) { return f.name.toLowerCase().endsWith('.docx'); });
-            var report = (currentJob && currentJob.report_filename) || (docx && docx.name);
+            var report = currentFiles.error ? '' : FilesView.reportName(currentJob, currentFiles);
             if (report) {
                 var btn = el('a', 'btn-primary', t('files_download_report'));
                 btn.href = fileUrl('artifacts', report, true);
                 header.appendChild(btn);
             }
-
-            var artifacts = currentFiles.artifacts;
-
-            // 1. Input data
-            container.appendChild(el('div', 'subsection-title', t('files_input') + ' (' + currentFiles.input.length + ')'));
-            renderFileList(container, 'input', currentFiles.input);
-
-            // 2. Result files: documents, the job's report first
-            var results = artifacts.filter(function(f) { return RESULT_EXT.some(function(ext) { return f.name.toLowerCase().endsWith(ext); }); });
-            results.sort(function(a, b) { return (b.name === report) - (a.name === report); });
-            container.appendChild(el('div', 'subsection-title', t('files_results') + ' (' + results.length + ')'));
-            if (results.length) {
-                var cards = el('div', 'result-grid');
-                results.forEach(function(f) {
-                    var card = el('a', 'result-card' + (f.name === report ? ' primary' : ''));
-                    card.href = fileUrl('artifacts', f.name, true);
-                    card.title = f.name;
-                    card.appendChild(el('span', 'result-icon', f.name.split('.').pop().toUpperCase()));
-                    var meta = el('span', 'result-meta');
-                    meta.appendChild(el('span', 'result-name', f.name));
-                    meta.appendChild(el('span', 'file-size', formatSize(f.size) + (f.name === report ? ' · ' + t('files_report_badge') : '')));
-                    card.appendChild(meta);
-                    cards.appendChild(card);
-                });
-                container.appendChild(cards);
-            } else {
-                container.appendChild(el('div', 'section-empty', t('files_none')));
-            }
-
-            // 3. Images: charts are saved as .png and .svg; show one per chart
-            var names = {};
-            artifacts.forEach(function(f) { names[f.name] = true; });
-            var images = artifacts.filter(function(f) {
-                if (!isImage(f.name)) return false;
-                return !(f.name.toLowerCase().endsWith('.svg') && names[f.name.replace(/\.svg$/i, '.png')]);
-            });
-            container.appendChild(el('div', 'subsection-title', t('files_images') + ' (' + images.length + ')'));
-            if (images.length) {
-                var grid = el('div', 'image-grid');
-                images.forEach(function(f) {
-                    var tile = el('a', 'image-tile');
-                    tile.href = fileUrl('artifacts', f.name, false);
-                    tile.target = '_blank';
-                    tile.rel = 'noopener';
-                    var img = el('img');
-                    img.src = tile.href;
-                    img.loading = 'lazy';
-                    img.alt = f.name;
-                    tile.appendChild(img);
-                    tile.appendChild(el('span', null, f.name));
-                    grid.appendChild(tile);
-                });
-                container.appendChild(grid);
-            } else {
-                container.appendChild(el('div', 'section-empty', t('files_none')));
-            }
-
-            // 4. Every generated file (code, cache, intermediate results), collapsed
-            var all = el('details', 'all-files');
-            all.appendChild(el('summary', 'subsection-title', t('files_all') + ' (' + artifacts.length + ')'));
-            renderFileList(all, 'artifacts', artifacts);
-            container.appendChild(all);
+            FilesView.render(container, jobId(), currentJob, currentFiles);
         }
 
         async function fetchFiles(quiet) {
@@ -615,13 +431,7 @@
                 sectionShell(container, 'files_title');
                 container.appendChild(el('div', 'section-empty', t('files_loading')));
             }
-            try {
-                var res = await fetch('/admin/api/jobs/' + encodeURIComponent(jobId()) + '/files');
-                var data = await res.json();
-                currentFiles = data.success ? data : { error: true };
-            } catch (e) {
-                currentFiles = { error: true };
-            }
+            currentFiles = await FilesView.fetchFiles(jobId());
             renderFiles();
         }
 

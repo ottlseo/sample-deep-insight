@@ -7,6 +7,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/admin/static/trace-view.css">
+    <link rel="stylesheet" href="/admin/static/files-view.css">
     <style>
         :root {
             --bg-deep: #0d0f13;
@@ -190,7 +191,24 @@
         .drawer-meta { display: flex; flex-wrap: wrap; gap: 0.3rem 1rem; font-family: var(--font-mono); font-size: 0.72rem; color: var(--text-muted); }
         .drawer-actions { display: flex; gap: 0.5rem; flex-shrink: 0; }
         .drawer-body { flex: 1; padding: 1rem 1.4rem; overflow: hidden; }
+        .drawer-files { overflow-y: auto; }
+        .drawer-tabs { display: flex; gap: 0.2rem; padding: 0 1.4rem; border-bottom: 1px solid var(--border); }
+        .drawer-tab {
+            padding: 0.6rem 0.9rem;
+            background: none;
+            border: none;
+            border-bottom: 2px solid transparent;
+            color: var(--text-muted);
+            font-family: var(--font-display);
+            font-size: 0.85rem;
+            font-weight: 600;
+            cursor: pointer;
+        }
+        .drawer-tab:hover { color: var(--text-secondary); }
+        .drawer-tab.active { color: var(--text-primary); border-bottom-color: var(--accent); }
+        .drawer-tab .tab-count { margin-left: 0.3rem; color: var(--text-muted); font-weight: 500; }
         .drawer-empty { color: var(--text-muted); padding: 2rem 0; }
+        .btn-accent { color: var(--accent); border-color: rgba(74, 124, 255, 0.4); }
         .mono { font-family: var(--font-mono); font-size: 0.8rem; color: var(--text-muted); }
         .empty-state { text-align: center; color: var(--text-muted); padding: 3rem; font-size: 1rem; }
     </style>
@@ -247,11 +265,14 @@
     <div class="drawer-backdrop" id="drawerBackdrop" onclick="closeDrawer()"></div>
     <aside class="drawer" id="drawer" aria-hidden="true">
         <div class="drawer-header" id="drawerHeader"></div>
+        <div class="drawer-tabs" id="drawerTabs"></div>
         <div class="drawer-body" id="drawerBody"></div>
+        <div class="drawer-body drawer-files" id="drawerFiles" hidden></div>
     </aside>
 
     <script src="/admin/static/admin-i18n.js"></script>
     <script src="/admin/static/trace-view.js"></script>
+    <script src="/admin/static/files-view.js"></script>
     <script>
         var allJobs = [];
         var currentFilter = '';
@@ -369,13 +390,46 @@
         var drawerJobId = null;
         var drawerTimer = null;
         var drawerState = {};
+        var drawerTab = 'trace';
+        var drawerFiles = null;
+
+        function renderDrawerTabs() {
+            var tabs = document.getElementById('drawerTabs');
+            tabs.replaceChildren();
+            [['trace', t('drawer_tab_trace')], ['files', t('drawer_tab_files')]].forEach(function(tab) {
+                var btn = TraceView.el('button', 'drawer-tab' + (drawerTab === tab[0] ? ' active' : ''), tab[1]);
+                if (tab[0] === 'files' && drawerFiles && !drawerFiles.error) {
+                    btn.appendChild(TraceView.el('span', 'tab-count', String((drawerFiles.artifacts || []).length)));
+                }
+                btn.onclick = function() { drawerTab = tab[0]; showDrawerTab(); };
+                tabs.appendChild(btn);
+            });
+        }
+
+        function showDrawerTab() {
+            renderDrawerTabs();
+            document.getElementById('drawerBody').hidden = drawerTab !== 'trace';
+            document.getElementById('drawerFiles').hidden = drawerTab !== 'files';
+        }
+
+        async function loadDrawerFiles() {
+            var jobId = drawerJobId;
+            var files = await FilesView.fetchFiles(jobId);
+            if (jobId !== drawerJobId) return;
+            drawerFiles = files;
+            var box = document.getElementById('drawerFiles');
+            box.replaceChildren();
+            FilesView.render(box, jobId, findJob(jobId), files);
+            renderDrawerTabs();
+            renderDrawerHeader();
+        }
 
         function findJob(id) {
             return allJobs.find(function(j) { return j.job_id === id; });
         }
 
         function openDrawer(jobId) {
-            if (drawerJobId !== jobId) drawerState = {};
+            if (drawerJobId !== jobId) { drawerState = {}; drawerFiles = null; }
             drawerJobId = jobId;
             document.getElementById('drawer').classList.add('open');
             document.getElementById('drawer').setAttribute('aria-hidden', 'false');
@@ -386,7 +440,10 @@
             renderDrawerHeader();
             var body = document.getElementById('drawerBody');
             body.replaceChildren(TraceView.el('div', 'drawer-empty', t('trace_loading')));
+            document.getElementById('drawerFiles').replaceChildren(TraceView.el('div', 'drawer-empty', t('files_loading')));
+            showDrawerTab();
             loadDrawerTrace();
+            loadDrawerFiles();
         }
 
         function closeDrawer() {
@@ -418,6 +475,12 @@
             header.appendChild(title);
 
             var actions = TraceView.el('div', 'drawer-actions');
+            var report = drawerFiles && !drawerFiles.error ? FilesView.reportName(job, drawerFiles) : job.report_filename;
+            if (report) {
+                var dl = TraceView.el('a', 'btn-sm btn-accent', t('files_download_report'));
+                dl.href = FilesView.fileUrl(job.job_id, 'artifacts', report, true);
+                actions.appendChild(dl);
+            }
             var page = TraceView.el('a', 'btn-sm', t('drawer_open_page'));
             page.href = '/admin/dashboard/' + encodeURIComponent(job.job_id);
             actions.appendChild(page);
@@ -454,7 +517,7 @@
 
         async function refreshDrawer() {
             await fetchJobs();
-            if (drawerJobId) { renderDrawerHeader(); loadDrawerTrace(); }
+            if (drawerJobId) { renderDrawerHeader(); loadDrawerTrace(); loadDrawerFiles(); }
         }
 
         document.addEventListener('keydown', function(e) {
@@ -493,7 +556,7 @@
         // Re-render table when language changes
         function onLangChange() {
             renderJobs();
-            if (drawerJobId) { renderDrawerHeader(); loadDrawerTrace(); }
+            if (drawerJobId) { renderDrawerHeader(); showDrawerTab(); loadDrawerTrace(); loadDrawerFiles(); }
         }
 
         applyAdminLang();
