@@ -6,6 +6,7 @@
     <title>Deep Insight — Admin Dashboard</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/admin/static/trace-view.css">
     <style>
         :root {
             --bg-deep: #0d0f13;
@@ -136,6 +137,60 @@
         .status-start { color: var(--amber); background: var(--amber-bg); }
         .stale-badge { color: var(--red); font-size: 0.75rem; font-weight: 600; margin-left: 0.4rem; }
         .query-cell { max-width: 300px; overflow: hidden; text-overflow: ellipsis; }
+        th.num, td.num { text-align: right; }
+        .io-cell {
+            max-width: 340px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            color: var(--text-secondary);
+            font-size: 0.85rem;
+        }
+        .io-cell.muted { color: var(--text-muted); font-style: italic; }
+        tr.job-row.selected td { background: var(--accent-glow); }
+
+        /* Side panel: trace of the clicked job */
+        .drawer-backdrop {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.45);
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.2s;
+            z-index: 20;
+        }
+        .drawer-backdrop.open { opacity: 1; pointer-events: auto; }
+        .drawer {
+            position: fixed;
+            top: 0;
+            right: 0;
+            bottom: 0;
+            width: min(1240px, 88vw);
+            display: flex;
+            flex-direction: column;
+            background: var(--bg-card);
+            border-left: 1px solid var(--border);
+            box-shadow: -12px 0 32px rgba(0, 0, 0, 0.35);
+            transform: translateX(100%);
+            transition: transform 0.22s ease;
+            z-index: 21;
+            --tv-height: calc(100vh - 7.5rem);
+        }
+        .drawer.open { transform: none; }
+        .drawer-header {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            padding: 1rem 1.4rem;
+            border-bottom: 1px solid var(--border);
+        }
+        .drawer-title { display: flex; flex-direction: column; gap: 0.25rem; min-width: 0; flex: 1; }
+        .drawer-title-main { display: flex; align-items: center; gap: 0.6rem; font-weight: 700; }
+        .drawer-query { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-secondary); font-size: 0.85rem; }
+        .drawer-meta { display: flex; flex-wrap: wrap; gap: 0.3rem 1rem; font-family: var(--font-mono); font-size: 0.72rem; color: var(--text-muted); }
+        .drawer-actions { display: flex; gap: 0.5rem; flex-shrink: 0; }
+        .drawer-body { flex: 1; padding: 1rem 1.4rem; overflow: hidden; }
+        .drawer-empty { color: var(--text-muted); padding: 2rem 0; }
         .mono { font-family: var(--font-mono); font-size: 0.8rem; color: var(--text-muted); }
         .empty-state { text-align: center; color: var(--text-muted); padding: 3rem; font-size: 1rem; }
     </style>
@@ -176,13 +231,12 @@
         <table>
             <thead>
                 <tr>
+                    <th data-i18n="th_timestamp">Timestamp</th>
                     <th data-i18n="th_status">Status</th>
-                    <th data-i18n="th_query">Query</th>
-                    <th data-i18n="th_started">Started</th>
-                    <th data-i18n="th_duration">Duration</th>
-                    <th data-i18n="th_tokens">Tokens</th>
-                    <th data-i18n="th_cache_hit">Cache Hit</th>
-                    <th data-i18n="th_report">Report</th>
+                    <th data-i18n="th_input">Input</th>
+                    <th data-i18n="th_output">Output</th>
+                    <th class="num" data-i18n="th_latency">Latency</th>
+                    <th class="num" data-i18n="th_tokens">Tokens</th>
                 </tr>
             </thead>
             <tbody id="jobsBody">
@@ -190,7 +244,14 @@
         </table>
     </div>
 
+    <div class="drawer-backdrop" id="drawerBackdrop" onclick="closeDrawer()"></div>
+    <aside class="drawer" id="drawer" aria-hidden="true">
+        <div class="drawer-header" id="drawerHeader"></div>
+        <div class="drawer-body" id="drawerBody"></div>
+    </aside>
+
     <script src="/admin/static/admin-i18n.js"></script>
+    <script src="/admin/static/trace-view.js"></script>
     <script>
         var allJobs = [];
         var currentFilter = '';
@@ -247,7 +308,7 @@
             if (filtered.length === 0) {
                 var tr = document.createElement('tr');
                 var td = document.createElement('td');
-                td.colSpan = 7;
+                td.colSpan = 6;
                 td.className = 'empty-state';
                 td.textContent = t('jobs_empty');
                 tr.appendChild(td);
@@ -257,12 +318,12 @@
 
             filtered.forEach(function(job) {
                 var tr = document.createElement('tr');
-                tr.className = 'job-row';
-                tr.addEventListener('click', function() {
-                    window.location.href = '/admin/dashboard/' + encodeURIComponent(job.job_id);
-                });
+                tr.className = 'job-row' + (job.job_id === drawerJobId ? ' selected' : '');
+                tr.dataset.jobId = job.job_id;
+                tr.addEventListener('click', function() { openDrawer(job.job_id); });
 
-                // Status cell
+                tr.appendChild(createCell(formatTime(job.started_at), 'mono'));
+
                 var statusTd = document.createElement('td');
                 var statusSpan = document.createElement('span');
                 statusSpan.className = 'status status-' + job.status.toLowerCase();
@@ -276,35 +337,129 @@
                 }
                 tr.appendChild(statusTd);
 
-                // Query cell
-                var queryTd = document.createElement('td');
-                queryTd.className = 'query-cell';
-                queryTd.textContent = (job.user_query || '').substring(0, 60);
-                queryTd.title = job.user_query || '';
-                tr.appendChild(queryTd);
+                var input = createCell(TraceView.preview(job.user_query || '-', 160), 'io-cell');
+                input.title = job.user_query || '';
+                tr.appendChild(input);
 
-                // Started
-                tr.appendChild(createCell(formatTime(job.started_at), 'mono'));
+                var out = outputText(job);
+                var output = createCell(out.text, 'io-cell' + (out.muted ? ' muted' : ''));
+                output.title = job.output_preview || '';
+                tr.appendChild(output);
 
-                // Duration
-                var duration = job.elapsed_seconds
+                var latency = job.elapsed_seconds
                     ? formatDuration(job.elapsed_seconds)
                     : (job.status === 'Start' ? t('jobs_running') : '-');
-                tr.appendChild(createCell(duration, 'mono'));
-
-                // Tokens
-                tr.appendChild(createCell(formatTokens(job.total_tokens), 'mono'));
-
-                // Cache hit
-                var cacheHit = job.cache_hit_rate != null ? job.cache_hit_rate + '%' : '-';
-                tr.appendChild(createCell(cacheHit, 'mono'));
-
-                // Report
-                tr.appendChild(createCell(job.report_filename || '-', 'mono'));
+                tr.appendChild(createCell(latency, 'mono num'));
+                tr.appendChild(createCell(formatTokens(job.total_tokens), 'mono num'));
 
                 tbody.appendChild(tr);
             });
         }
+
+        // Output column: the run's final answer, else what is known about it
+        function outputText(job) {
+            if (job.output_preview) return { text: TraceView.preview(job.output_preview, 160) };
+            if (job.status === 'Start') return { text: t('jobs_running'), muted: true };
+            if (job.status === 'Failed') return { text: job.error_message ? TraceView.preview(job.error_message, 160) : '-', muted: true };
+            return { text: job.report_filename || '-', muted: true };
+        }
+
+        // ---------- Side panel ----------
+
+        var drawerJobId = null;
+        var drawerTimer = null;
+        var drawerState = {};
+
+        function findJob(id) {
+            return allJobs.find(function(j) { return j.job_id === id; });
+        }
+
+        function openDrawer(jobId) {
+            if (drawerJobId !== jobId) drawerState = {};
+            drawerJobId = jobId;
+            document.getElementById('drawer').classList.add('open');
+            document.getElementById('drawer').setAttribute('aria-hidden', 'false');
+            document.getElementById('drawerBackdrop').classList.add('open');
+            document.querySelectorAll('tr.job-row').forEach(function(r) {
+                r.classList.toggle('selected', r.dataset.jobId === jobId);
+            });
+            renderDrawerHeader();
+            var body = document.getElementById('drawerBody');
+            body.replaceChildren(TraceView.el('div', 'drawer-empty', t('trace_loading')));
+            loadDrawerTrace();
+        }
+
+        function closeDrawer() {
+            drawerJobId = null;
+            if (drawerTimer) { clearTimeout(drawerTimer); drawerTimer = null; }
+            document.getElementById('drawer').classList.remove('open');
+            document.getElementById('drawer').setAttribute('aria-hidden', 'true');
+            document.getElementById('drawerBackdrop').classList.remove('open');
+            document.querySelectorAll('tr.job-row.selected').forEach(function(r) { r.classList.remove('selected'); });
+        }
+
+        function renderDrawerHeader() {
+            var job = findJob(drawerJobId);
+            var header = document.getElementById('drawerHeader');
+            header.replaceChildren();
+            if (!job) return;
+            var title = TraceView.el('div', 'drawer-title');
+            var main = TraceView.el('div', 'drawer-title-main');
+            var status = TraceView.el('span', 'status status-' + job.status.toLowerCase(), t('status_' + job.status.toLowerCase()));
+            main.appendChild(status);
+            main.appendChild(TraceView.el('span', null, formatTime(job.started_at)));
+            title.appendChild(main);
+            title.appendChild(TraceView.el('div', 'drawer-query', job.user_query || ''));
+            var meta = TraceView.el('div', 'drawer-meta');
+            meta.appendChild(TraceView.el('span', null, t('th_latency') + ' ' + (job.elapsed_seconds ? formatDuration(job.elapsed_seconds) : '-')));
+            meta.appendChild(TraceView.el('span', null, t('th_tokens') + ' ' + formatTokens(job.total_tokens)));
+            meta.appendChild(TraceView.el('span', null, job.job_id));
+            title.appendChild(meta);
+            header.appendChild(title);
+
+            var actions = TraceView.el('div', 'drawer-actions');
+            var page = TraceView.el('a', 'btn-sm', t('drawer_open_page'));
+            page.href = '/admin/dashboard/' + encodeURIComponent(job.job_id);
+            actions.appendChild(page);
+            var close = TraceView.el('button', 'btn-sm', '✕');
+            close.title = t('drawer_close');
+            close.onclick = closeDrawer;
+            actions.appendChild(close);
+            header.appendChild(actions);
+        }
+
+        async function loadDrawerTrace() {
+            var jobId = drawerJobId;
+            if (drawerTimer) { clearTimeout(drawerTimer); drawerTimer = null; }
+            var data;
+            try {
+                var res = await fetch('/admin/api/jobs/' + encodeURIComponent(jobId) + '/trace');
+                data = await res.json();
+            } catch (e) {
+                data = { success: false };
+            }
+            if (jobId !== drawerJobId) return;  // closed or switched meanwhile
+            var job = findJob(jobId);
+            var body = document.getElementById('drawerBody');
+            body.replaceChildren();
+            if (!data.success) {
+                body.appendChild(TraceView.el('div', 'drawer-empty', t('trace_load_error')));
+            } else if (!data.available) {
+                body.appendChild(TraceView.el('div', 'drawer-empty', t('trace_unavailable')));
+            } else {
+                TraceView.render(body, data.records, { job: job, running: job && job.status === 'Start', state: drawerState });
+            }
+            if (job && job.status === 'Start') drawerTimer = setTimeout(refreshDrawer, 15000);
+        }
+
+        async function refreshDrawer() {
+            await fetchJobs();
+            if (drawerJobId) { renderDrawerHeader(); loadDrawerTrace(); }
+        }
+
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape' && drawerJobId) closeDrawer();
+        });
 
         function setFilter(btn) {
             document.querySelectorAll('.filter-btn').forEach(function(b) { b.classList.remove('active'); });
@@ -338,6 +493,7 @@
         // Re-render table when language changes
         function onLangChange() {
             renderJobs();
+            if (drawerJobId) { renderDrawerHeader(); loadDrawerTrace(); }
         }
 
         applyAdminLang();
