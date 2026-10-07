@@ -13,13 +13,12 @@ import agentcore_runtime as runtime
 class FakeS3:
     def __init__(self):
         self.objects = {}
+        self.history = []
 
     def put_object(self, Bucket, Key, Body, ContentType=None):
-        self.objects[Key] = Body
-
-    def upload_file(self, path, bucket, key, ExtraArgs=None):
-        with open(path, encoding="utf-8") as f:
-            self.objects[key] = f.read()
+        body = Body.decode("utf-8") if isinstance(Body, bytes) else Body
+        self.objects[Key] = body
+        self.history.append((Key, body))
 
 
 class FakeGraph:
@@ -36,6 +35,8 @@ class FakeGraph:
 
 
 TEXT = {"type": "agent_text_stream", "event_type": "text_chunk", "agent_name": "planner", "data": "plan"}
+USAGE = {"type": "agent_usage_stream", "event_type": "usage_metadata", "agent_name": "planner",
+         "model_id": "m", "input_tokens": 10, "output_tokens": 5}
 TOOL = {"type": "agent_tool_stream", "event_type": "tool_use", "agent_name": "coder",
         "tool_name": "custom_interpreter_python_tool", "tool_id": "t1", "tool_input": '{"code": "1+1"}'}
 
@@ -72,9 +73,11 @@ def _status(s3):
     return json.loads(s3.objects["deep-insight/fargate_sessions/sess-1/output/job_status.json"])
 
 
+TRACE_KEY = "deep-insight/traces/job-1/events.jsonl"
+
+
 def _trace(s3):
-    text = s3.objects["deep-insight/fargate_sessions/sess-1/output/events.jsonl"]
-    return [json.loads(line) for line in text.splitlines()]
+    return [json.loads(line) for line in s3.objects[TRACE_KEY].splitlines()]
 
 
 def test_success_reports_trace_with_tool_events_and_success(s3, monkeypatch):
@@ -85,6 +88,30 @@ def test_success_reports_trace_with_tool_events_and_success(s3, monkeypatch):
     assert _trace(s3)[0]["job_id"] == "job-1"
     status = _status(s3)
     assert status["status"] == "Success" and status["job_id"] == "job-1" and status["session_id"] == "sess-1"
+    assert status["trace_path"] == TRACE_KEY
+
+
+def test_trace_uploaded_after_each_agent_invocation(s3, monkeypatch):
+    _run(monkeypatch, FakeGraph([TEXT, USAGE, TOOL]))
+    uploads = [body for key, body in s3.history if key == TRACE_KEY]
+    assert len(uploads) == 2  # after the planner finished, then the final one
+    assert [json.loads(l)["kind"] for l in uploads[0].splitlines()] == ["input", "text", "usage"]
+    assert [r["kind"] for r in _trace(s3)] == ["input", "text", "usage", "tool_use"]
+    # the final upload lands after the checkpoint, and before job_status.json
+    keys = [key for key, _ in s3.history]
+    assert keys[-1].endswith("job_status.json") and keys[-2] == TRACE_KEY
+
+
+def test_run_without_job_id_keys_trace_by_request_id(s3, monkeypatch):
+    monkeypatch.setattr(runtime, "build_graph", lambda: FakeGraph([TEXT]))
+    monkeypatch.setattr(runtime, "_generate_request_id", lambda: "req-9")
+
+    async def main():
+        return [e async for e in runtime.agentcore_streaming_execution({"prompt": "q"}, None)]
+
+    asyncio.run(main())
+    assert "deep-insight/traces/req-9/events.jsonl" in s3.objects
+    assert _status(s3)["job_id"] is None
 
 
 def test_exception_mid_run_reports_failed(s3, monkeypatch):

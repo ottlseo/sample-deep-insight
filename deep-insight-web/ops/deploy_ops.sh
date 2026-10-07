@@ -462,7 +462,10 @@ OPS_TASK_POLICY=$(cat <<POLICY
             "Sid": "S3JobTraceRead",
             "Effect": "Allow",
             "Action": "s3:GetObject",
-            "Resource": "arn:aws:s3:::${S3_BUCKET}/deep-insight/fargate_sessions/*/output/*"
+            "Resource": [
+                "arn:aws:s3:::${S3_BUCKET}/deep-insight/traces/*",
+                "arn:aws:s3:::${S3_BUCKET}/deep-insight/fargate_sessions/*/output/*"
+            ]
         }
     ]
 }

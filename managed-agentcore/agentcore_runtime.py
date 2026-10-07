@@ -92,6 +92,7 @@ AGENTCORE_SESSION_NAME = "agentcore-session"
 TRACER_MODULE_NAME_DEFAULT = "agentcore_insight_extractor"
 TRACER_LIBRARY_VERSION_DEFAULT = "2.0.0"
 SEPARATOR_LINE = "=" * 60
+TRACE_PREFIX = "deep-insight/traces/"
 
 # Timeout configurations (in seconds)
 AWS_CLI_LIST_TIMEOUT = 30
@@ -104,7 +105,7 @@ from src.utils.agentcore_observability import set_session_context, add_span_even
 
 # Import event queue for unified event processing
 from src.utils.event_queue import clear_queue
-from src.utils.event_log import EventLog
+from src.utils.event_log import EventLog, TraceUploader
 
 # Import Fargate session manager for cleanup
 from src.tools.global_fargate_coordinator import get_global_session
@@ -443,12 +444,37 @@ def _save_token_usage_to_s3(request_id: str, job_id: str = None) -> None:
     except Exception as e:
         print(f"⚠️ Failed to upload token usage to S3: {e}", flush=True)
 
-def _save_job_report_to_s3(request_id: str, job_id: str, event_log: EventLog, status: str, error: str = "") -> None:
+def _create_trace_uploader(job_id: str, request_id: str, event_log: EventLog):
     """
-    Upload the agent trace and the job's final status for the ops dashboard.
+    Create the uploader that keeps the agent trace current in S3.
+
+    The trace is keyed by job_id, which the dashboard knows from the moment the
+    job starts -- unlike the Fargate session_id, which doesn't exist yet while
+    the Coordinator and Planner run and reaches the job record only at the end.
+    Runs without a job_id (eval harness, direct invocation) use request_id.
+
+    Returns:
+        TraceUploader, or None if S3_BUCKET_NAME is not set
+    """
+    import re
+    import boto3
+
+    s3_bucket = os.getenv('S3_BUCKET_NAME')
+    if not s3_bucket:
+        print(f"⚠️ S3_BUCKET_NAME not set, agent trace will not be uploaded", flush=True)
+        return None
+
+    trace_id = job_id if job_id and re.fullmatch(r"[A-Za-z0-9_-]+", job_id) else request_id
+    s3_client = boto3.client('s3', region_name=os.getenv('AWS_REGION', 'us-east-1'))
+    return TraceUploader(event_log, s3_client, s3_bucket, f"{TRACE_PREFIX}{trace_id}/events.jsonl")
+
+def _save_job_report_to_s3(request_id: str, job_id: str, trace_uploader, event_log: EventLog,
+                           status: str, error: str = "") -> None:
+    """
+    Upload the complete agent trace, then the job's final status, for the ops dashboard.
 
     Uploads, in this order:
-    - s3://{bucket}/deep-insight/fargate_sessions/{session_id}/output/events.jsonl
+    - s3://{bucket}/deep-insight/traces/{job_id or request_id}/events.jsonl
     - s3://{bucket}/deep-insight/fargate_sessions/{session_id}/output/job_status.json
 
     job_status.json triggers the ops Lambda, which updates the job record by
@@ -460,6 +486,7 @@ def _save_job_report_to_s3(request_id: str, job_id: str, event_log: EventLog, st
     Args:
         request_id (str): Request identifier to retrieve session ID
         job_id (str): Ops job ID from the payload (None outside the Web UI)
+        trace_uploader (TraceUploader): None if S3 is not configured
         event_log (EventLog): Trace recorded during the run
         status (str): "Success" or "Failed"
         error (str): Failure description
@@ -468,26 +495,19 @@ def _save_job_report_to_s3(request_id: str, job_id: str, event_log: EventLog, st
     import time
     import boto3
 
-    s3_bucket = os.getenv('S3_BUCKET_NAME')
-    if not s3_bucket:
-        print(f"⚠️ S3_BUCKET_NAME not set, skipping job report upload", flush=True)
+    if trace_uploader is None:
         event_log.discard()
         return
 
     try:
+        if trace_uploader.finish():
+            print(f"✅ Agent trace uploaded to S3: s3://{trace_uploader.bucket}/{trace_uploader.key}", flush=True)
+
         session_id = _get_output_session_id(request_id)
-        s3_prefix = f"deep-insight/fargate_sessions/{session_id}/output/"
+        status_key = f"deep-insight/fargate_sessions/{session_id}/output/job_status.json"
         s3_client = boto3.client('s3', region_name=os.getenv('AWS_REGION', 'us-east-1'))
-
-        trace_key = f"{s3_prefix}events.jsonl"
-        event_log.close()
-        s3_client.upload_file(event_log.path, s3_bucket, trace_key,
-                              ExtraArgs={'ContentType': 'application/x-ndjson'})
-        print(f"✅ Agent trace uploaded to S3: s3://{s3_bucket}/{trace_key}", flush=True)
-
-        status_key = f"{s3_prefix}job_status.json"
         s3_client.put_object(
-            Bucket=s3_bucket,
+            Bucket=trace_uploader.bucket,
             Key=status_key,
             Body=json.dumps({
                 "job_id": job_id,
@@ -496,11 +516,11 @@ def _save_job_report_to_s3(request_id: str, job_id: str, event_log: EventLog, st
                 "status": status,
                 "error": error[:1000],
                 "ended_at": int(time.time()),
-                "trace_path": trace_key,
+                "trace_path": trace_uploader.key,
             }, ensure_ascii=False),
             ContentType='application/json'
         )
-        print(f"✅ Job status ({status}) uploaded to S3: s3://{s3_bucket}/{status_key}", flush=True)
+        print(f"✅ Job status ({status}) uploaded to S3: s3://{trace_uploader.bucket}/{status_key}", flush=True)
     except Exception as e:
         print(f"⚠️ Failed to upload job report to S3: {e}", flush=True)
     finally:
@@ -737,6 +757,7 @@ async def agentcore_streaming_execution(
         job_id=job_id,
         request_id=request_id,
     )
+    trace_uploader = _create_trace_uploader(job_id, request_id, event_log)
 
     context_token = set_session_context(AGENTCORE_SESSION_NAME)
 
@@ -768,6 +789,9 @@ async def agentcore_streaming_execution(
             async for event in graph.stream_async(graph_input):
                 event_count += 1
                 event_log.add(event)
+                # Keep the S3 trace current: one upload per finished agent invocation
+                if trace_uploader and EventLog.ends_agent_invocation(event):
+                    trace_uploader.checkpoint()
                 # Stream small/medium events as keepalives
                 if event.get("type") in STREAM_EVENT_TYPES:
                     streamed_count += 1
@@ -793,7 +817,7 @@ async def agentcore_streaming_execution(
 
             # Step 6.5: Save token usage, then the trace and final status, to S3
             _save_token_usage_to_s3(request_id, job_id)
-            _save_job_report_to_s3(request_id, job_id, event_log, "Success")
+            _save_job_report_to_s3(request_id, job_id, trace_uploader, event_log, "Success")
             report_saved = True
 
             print("=== AgentCore Runtime Event Stream Complete ===")
@@ -828,8 +852,8 @@ async def agentcore_streaming_execution(
         # The failure report goes first: it needs the session cleanup drops.
         if not report_saved:
             _save_token_usage_to_s3(request_id, job_id)
-            _save_job_report_to_s3(request_id, job_id, event_log, "Failed",
-                                   failure or "Run ended before completion")
+            _save_job_report_to_s3(request_id, job_id, trace_uploader, event_log,
+                                   "Failed", failure or "Run ended before completion")
         if not cleanup_done:
             _cleanup_request_session(request_id)
         otel_context.detach(context_token)

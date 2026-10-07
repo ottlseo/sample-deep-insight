@@ -8,7 +8,10 @@ graph event before that filter, in a compact form:
   - the streamed updates of one tool call collapse to its final input
   - string fields are capped at MAX_FIELD_CHARS
 Records are appended to a local file as they complete, so memory stays flat
-however long the run is. The file is uploaded once, at teardown.
+however long the run is. TraceUploader puts the file to S3 each time an agent
+invocation finishes and once more at teardown, so the dashboard can follow a
+running job and a runtime that dies mid-run still leaves the trace up to the
+last finished agent.
 
 Record kinds (one JSON object per line, in order):
   input        prompt, data_directory, job_id, request_id
@@ -18,12 +21,15 @@ Record kinds (one JSON object per line, in order):
   tool_result  tool, tool_id, output
   usage        model_id and token counts of one agent invocation
   plan_review  plan shown to the user, revision_count
+  plan_feedback  how the review ended: decision, feedback, revision_count,
+               waited_seconds
 """
 
 import json
 import logging
 import os
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import Any, Dict, Optional
 
@@ -134,6 +140,16 @@ class EventLog:
                 "revision_count": event.get("revision_count", 0),
             })
 
+        elif kind == "plan_review_result":
+            self._flush()
+            self._write({
+                "kind": "plan_feedback", "agent": "plan_reviewer", "ts": ts,
+                "decision": event.get("decision", ""),
+                "feedback": event.get("feedback", ""),
+                "revision_count": event.get("revision_count", 0),
+                "waited_seconds": event.get("waited_seconds", 0),
+            })
+
     def _flush(self) -> None:
         if self._pending is None:
             return
@@ -146,6 +162,18 @@ class EventLog:
         self._seq += 1
         line = json.dumps({"seq": self._seq, **_cap(record)}, ensure_ascii=False, default=str)
         self._file.write(line + "\n")
+
+    @staticmethod
+    def ends_agent_invocation(event: Dict[str, Any]) -> bool:
+        """True for the usage event an agent emits once its invocation finishes."""
+        return event.get("event_type") == "usage_metadata" and "model_id" in event
+
+    def snapshot(self) -> bytes:
+        """Everything recorded so far, including the record still being merged."""
+        self._flush()
+        self._file.flush()
+        with open(self.path, "rb") as f:
+            return f.read()
 
     def close(self) -> None:
         """Flush the last record and close the file. Safe to call twice."""
@@ -162,3 +190,42 @@ class EventLog:
             os.remove(self.path)
         except OSError:
             pass
+
+
+class TraceUploader:
+    """Puts the event log to one S3 key, during the run and at the end.
+
+    S3 has no append, so each upload replaces the object with the whole log.
+    Uploads run on a single worker thread: the stream isn't blocked, and they
+    land in order, so an older snapshot never overwrites a newer one.
+    """
+
+    def __init__(self, event_log: EventLog, s3_client, bucket: str, key: str):
+        self.event_log = event_log
+        self.s3_client = s3_client
+        self.bucket = bucket
+        self.key = key
+        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="trace-upload")
+
+    def checkpoint(self) -> None:
+        """Queue an upload of the log as it is now. Never raises."""
+        try:
+            self._executor.submit(self._put, self.event_log.snapshot())
+        except Exception as e:
+            logger.warning(f"Trace checkpoint skipped ({e})")
+
+    def finish(self) -> bool:
+        """Wait for queued uploads, then upload the complete log. True on success."""
+        self._executor.shutdown(wait=True)
+        self.event_log.close()
+        with open(self.event_log.path, "rb") as f:
+            return self._put(f.read())
+
+    def _put(self, body: bytes) -> bool:
+        try:
+            self.s3_client.put_object(Bucket=self.bucket, Key=self.key, Body=body,
+                                      ContentType="application/x-ndjson")
+            return True
+        except Exception as e:
+            logger.warning(f"Trace upload to s3://{self.bucket}/{self.key} failed ({e})")
+            return False

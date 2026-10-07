@@ -37,12 +37,16 @@ def client(monkeypatch):
             KeySchema=[{"AttributeName": "job_id", "KeyType": "HASH"}],
         )
         table = boto3.resource("dynamodb").Table(TABLE)
-        table.put_item(Item={"job_id": "job-1", "status": "Success", "session_id": SESSION, "started_at": 1})
+        table.put_item(Item={"job_id": "job-1", "status": "Success", "session_id": SESSION, "started_at": 1,
+                             "trace_path": "deep-insight/traces/job-1/events.jsonl"})
+        table.put_item(Item={"job_id": "job-3", "status": "Start", "started_at": 3})
         table.put_item(Item={"job_id": "job-2", "status": "Start", "started_at": 2})
 
         trace = [{"seq": 1, "kind": "input", "prompt": "q"}, {"seq": 2, "kind": "text", "agent": "planner", "text": "plan"}]
-        s3.put_object(Bucket=BUCKET, Key=f"deep-insight/fargate_sessions/{SESSION}/output/events.jsonl",
-                      Body="\n".join(json.dumps(r) for r in trace) + "\n")
+        body = "\n".join(json.dumps(r) for r in trace) + "\n"
+        # job-1 finished (trace_path recorded); job-3 is running (trace at its job_id key)
+        s3.put_object(Bucket=BUCKET, Key="deep-insight/traces/job-1/events.jsonl", Body=body)
+        s3.put_object(Bucket=BUCKET, Key="deep-insight/traces/job-3/events.jsonl", Body=body)
         s3.put_object(Bucket=BUCKET, Key=f"deep-insight/fargate_sessions/{SESSION}/artifacts/chart.png", Body=b"PNG")
         s3.put_object(Bucket=BUCKET, Key=f"deep-insight/fargate_sessions/{SESSION}/artifacts/보고서.docx", Body=b"DOCX")
         s3.put_object(Bucket=BUCKET, Key=f"deep-insight/fargate_sessions/{SESSION}/artifacts/chart.svg", Body=b"<svg/>")
@@ -62,7 +66,12 @@ def test_trace_returns_records(client):
     assert [r["kind"] for r in data["records"]] == ["input", "text"]
 
 
-def test_trace_unavailable_without_session_or_file(client):
+def test_running_job_trace_read_from_job_id_key(client):
+    data = client.get("/admin/api/jobs/job-3/trace").json()
+    assert data["available"] is True and len(data["records"]) == 2
+
+
+def test_trace_unavailable_before_first_upload(client):
     assert client.get("/admin/api/jobs/job-2/trace").json() == {"success": True, "available": False, "records": []}
 
 

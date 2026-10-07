@@ -245,13 +245,15 @@ def get_job(job_id: str, claims: dict = Depends(require_admin)):
 
 # ---------- Job trace, artifacts and files ----------
 #
-# Read from the job's S3 session folder (session_id comes from the job record):
-#   deep-insight/fargate_sessions/{session_id}/output/events.jsonl   agent trace
-#   deep-insight/fargate_sessions/{session_id}/artifacts/            generated files
-#   uploads/{job_id}/                                                input data
+#   deep-insight/traces/{job_id}/events.jsonl              agent trace, updated after
+#                                                          each agent invocation
+#   deep-insight/fargate_sessions/{session_id}/artifacts/  generated files (session_id
+#                                                          reaches the record at the end)
+#   uploads/{job_id}/                                      input data
 
 _SAFE_ID = re.compile(r"^[a-zA-Z0-9_-]+$")
 _SESSIONS_PREFIX = "deep-insight/fargate_sessions/"
+_TRACES_PREFIX = "deep-insight/traces/"
 
 # Served inline (previews); everything else downloads. Inline responses carry
 # CSP sandbox so an SVG or text file can't run script on the admin origin.
@@ -313,18 +315,17 @@ def _list_files(s3, prefix: str) -> list:
 def get_job_trace(job_id: str, claims: dict = Depends(require_admin)):
     """Agent trace recorded by the runtime (events.jsonl), one record per step.
 
-    available=False for jobs that ran before the runtime recorded traces, or
-    that haven't finished yet.
+    A running job's trace covers the agents finished so far. available=False
+    for jobs that ran before the runtime recorded traces, or whose first agent
+    hasn't finished yet.
     """
     if not S3_BUCKET_NAME:
         return {"success": False, "error": "S3_BUCKET_NAME not configured"}
     try:
         item = _get_job_item(job_id)
-        session_id = str(item.get("session_id", ""))
-        trace_path = str(item.get("trace_path", ""))
-        if not trace_path and _SAFE_ID.match(session_id):
-            trace_path = f"{_SESSIONS_PREFIX}{session_id}/output/events.jsonl"
-        if not trace_path.startswith(_SESSIONS_PREFIX):
+        # trace_path is set when the job ends; until then the trace is at its job_id key
+        trace_path = str(item.get("trace_path", "")) or f"{_TRACES_PREFIX}{job_id}/events.jsonl"
+        if not trace_path.startswith((_TRACES_PREFIX, _SESSIONS_PREFIX)):
             return {"success": True, "available": False, "records": []}
 
         s3 = boto3.client("s3", region_name=AWS_REGION)
