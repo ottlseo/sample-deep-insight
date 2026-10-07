@@ -20,19 +20,22 @@ All Ops resources are optional — the Web UI works normally without them.
 ### How a job's status and trace are recorded
 
 ```
-Web UI /analyze ──► DynamoDB: Start ─────────────────────────────────┐
-     │ payload: prompt, data_directory, job_id                        │
-     ▼                                                                │
-AgentCore Runtime (every exit path: success, error, client disconnect)│
-     └─► s3://…/fargate_sessions/{session_id}/output/                 │
-           token_usage.json, events.jsonl (trace), job_status.json    │
-                                                │ S3 event            │
-                                                ▼                     ▼
-                              Lambda: update job by job_id ──► Success / Failed + SNS
+Web UI /analyze ──► DynamoDB: Start
+     │ payload: prompt, data_directory, job_id
+     ▼
+AgentCore Runtime
+     ├─ after each agent invocation, and at the end:
+     │    s3://…/deep-insight/traces/{job_id}/events.jsonl  ◄── dashboard reads the trace
+     └─ at the end (success, error, client disconnect):
+          s3://…/fargate_sessions/{session_id}/output/token_usage.json, job_status.json
+                                                     │ S3 event
+                                                     ▼
+                         Lambda: update job by job_id ──► Success / Failed + SNS
 EventBridge (15 min) ──► Lambda: Start for > STALE_JOB_MINUTES ──► Failed
 ```
 
-The runtime records the trace before the response stream's event filter, so tool calls (generated code, execution output) are included even though they are never streamed to the browser. Because the runtime reports the final status itself, a job settles even if the browser connection drops mid-run. The schedule covers a runtime that stops without reporting (default 120 minutes, Lambda env `STALE_JOB_MINUTES`).
+- **Trace**: the runtime records every agent event before the response stream's event filter, so tool calls (generated code, execution output) are included even though they are never streamed to the browser. It is keyed by `job_id`, which the dashboard knows from the start, and re-uploaded after each agent invocation: a running job shows the agents finished so far, and a runtime that dies mid-run still leaves the trace up to its last finished agent. Plan reviews (HITL) are recorded with the plan shown and the user's answer (approved / revision requested with feedback / auto-approved).
+- **Status**: the runtime reports the final status itself, so a job settles even if the browser connection drops mid-run. The schedule covers a runtime that stops without reporting (default 120 minutes, Lambda env `STALE_JOB_MINUTES`).
 
 **References**:
 - [Planning Documents](../../docs/features/ops-dashboard/plan/) — business requirements, research, technical approach, implementation plan
@@ -76,7 +79,7 @@ This creates:
 | Cognito User Pool | `deep-insight-ops-admins` (no self-signup, min 12 char password) |
 | Cognito App Client | `deep-insight-ops-web` (no client secret) |
 | Cognito Admin Users | One per admin email (temporary password sent via email) |
-| Web Task Role Policy | DynamoDB + SNS permissions, S3 read on `fargate_sessions/*/output/*` (trace) |
+| Web Task Role Policy | DynamoDB + SNS permissions, S3 read on `deep-insight/traces/*` (agent trace) |
 | ECS Task Definition | `DYNAMODB_TABLE_NAME`, `SNS_TOPIC_ARN`, `COGNITO_USER_POOL_ID`, `COGNITO_CLIENT_ID` env vars added |
 
 ### Step 2: Redeploy Web UI
@@ -164,7 +167,7 @@ After login, the dashboard shows all analysis jobs with status, duration, tokens
 
 <img src="img/admin_job_list_page.png" alt="Admin Jobs Dashboard" width="700"/>
 
-Click any job row to view full details: token breakdown, generated images and files (inline preview, download), input data, report download, and the agent trace. The trace shows the agents as steps in run order (Coordinator → Planner → Supervisor → Coder → …); click a step to see the agent's response, reasoning, tool calls with their code, and tool output. Jobs that ran before the runtime recorded traces show files only.
+Click any job row to view full details: token breakdown, generated images and files (inline preview, download), input data, report download, and the agent trace. The trace shows the agents as steps in run order (Coordinator → Planner → Supervisor → Coder → …); click a step to see its records: response, reasoning, tool calls with their code, tool output. Each record collapses to a one-line preview and opens as formatted text or a JSON tree; the raw record is one click further. Plan reviews show the plan, the decision, and the user's feedback, with a summary of every review at the top of the trace. Running jobs show the agents finished so far; jobs that ran before the runtime recorded traces show files only.
 
 <img src="img/Job_detail_page.png" alt="Job Detail Page" width="700"/>
 
@@ -264,8 +267,9 @@ aws logs tail /aws/lambda/deep-insight-job-complete --region us-west-2 --since 1
 The runtime uploads `job_status.json` when the run ends, and the Lambda updates the job by `job_id`. A job left in `Start` means the runtime stopped without reporting, or runs an older version; the stale job sweep marks it Failed after `STALE_JOB_MINUTES`.
 
 ```bash
-# Check what the runtime uploaded (job_status.json, events.jsonl, token_usage.json)
+# Check what the runtime uploaded (job_status.json, token_usage.json) and the trace
 aws s3 ls s3://<YOUR_BUCKET>/deep-insight/fargate_sessions/<SESSION_ID>/output/
+aws s3 ls s3://<YOUR_BUCKET>/deep-insight/traces/<JOB_ID>/
 
 # Check the sweep schedule exists
 aws events describe-rule --name deep-insight-stale-job-sweep --region us-west-2

@@ -299,6 +299,76 @@
         .trace-pre.code { background: #0a0c10; border: 1px solid var(--border); }
         .trace-text.muted { color: var(--text-muted); font-style: italic; }
         .trace-usage { font-family: var(--font-mono); font-size: 0.75rem; color: var(--text-muted); }
+        details.record {
+            background: var(--bg-surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            margin-bottom: 0.5rem;
+        }
+        details.record[open] { border-color: var(--border-hover); }
+        .record-summary {
+            display: flex;
+            align-items: baseline;
+            gap: 0.7rem;
+            padding: 0.5rem 0.8rem;
+            cursor: pointer;
+            list-style: none;
+            font-size: 0.8rem;
+        }
+        .record-summary::-webkit-details-marker { display: none; }
+        .record-summary::before { content: '▸'; color: var(--text-muted); font-size: 0.75rem; }
+        details.record[open] > .record-summary::before { content: '▾'; }
+        .record-label { font-weight: 600; color: var(--text-secondary); white-space: nowrap; }
+        .record-label .tool-name { color: var(--amber); font-family: var(--font-mono); font-weight: 500; }
+        .record-preview {
+            color: var(--text-muted);
+            font-size: 0.78rem;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            min-width: 0;
+        }
+        details.record[open] > .record-summary .record-preview { display: none; }
+        .record-body { padding: 0 0.8rem 0.8rem; }
+        details.record-raw { margin-top: 0.6rem; }
+        details.record-raw > summary { cursor: pointer; color: var(--text-muted); font-size: 0.72rem; font-family: var(--font-mono); }
+        .json-node > summary { cursor: pointer; font-family: var(--font-mono); font-size: 0.76rem; }
+        .json-children { padding-left: 1.1rem; border-left: 1px dashed var(--border); margin-left: 0.3rem; }
+        .json-row { font-family: var(--font-mono); font-size: 0.76rem; padding: 0.1rem 0; word-break: break-word; }
+        .json-row .trace-pre { margin: 0.25rem 0 0.4rem; }
+        .json-key { color: var(--accent-hover); }
+        .json-meta { color: var(--text-muted); }
+        .json-string { color: var(--green); white-space: pre-wrap; }
+        .json-number { color: var(--amber); }
+        .json-boolean, .json-null { color: #f472b6; }
+        .decision {
+            display: inline-block;
+            padding: 0.05rem 0.45rem;
+            border-radius: var(--radius-xs);
+            font-size: 0.7rem;
+            font-weight: 600;
+            white-space: nowrap;
+        }
+        .decision-ok { color: var(--green); background: var(--green-bg); }
+        .decision-warn { color: var(--amber); background: var(--amber-bg); }
+        .decision-muted { color: var(--text-muted); background: var(--bg-elevated); }
+        .decision-fail { color: var(--red); background: var(--red-bg); }
+        .hitl-card { background: var(--bg-elevated); border-radius: var(--radius-sm); padding: 0.7rem 0.9rem; }
+        .hitl-feedback { font-size: 0.9rem; line-height: 1.55; white-space: pre-wrap; margin-bottom: 0.4rem; }
+        .hitl-summary { margin-bottom: 1rem; }
+        .hitl-summary .subsection-title { margin-top: 0; }
+        .hitl-row { display: flex; align-items: baseline; gap: 0.6rem; padding: 0.25rem 0; font-size: 0.85rem; }
+        .hitl-feedback-inline { color: var(--text-primary); }
+        .step-actions { margin-left: auto; display: flex; gap: 0.8rem; }
+        .btn-link {
+            background: none;
+            border: none;
+            color: var(--accent);
+            font-family: var(--font-display);
+            font-size: 0.78rem;
+            cursor: pointer;
+        }
+        .btn-link:hover { text-decoration: underline; }
         details.full-prompt { margin-bottom: 1rem; }
         details.full-prompt summary { cursor: pointer; color: var(--text-muted); font-size: 0.85rem; margin-bottom: 0.5rem; }
     </style>
@@ -633,77 +703,168 @@
                 last.records.push(r);
                 last.end = r.end_ts || r.ts;
                 if (r.kind === 'tool_use') last.tools++;
+                if (r.kind === 'plan_feedback') last.decision = r.decision;
             });
             return steps;
         }
 
-        function textBlock(label, text, className) {
-            var block = el('div', 'trace-block');
-            block.appendChild(el('div', 'trace-label', label));
-            block.appendChild(el('div', className || 'trace-text', text));
-            return block;
+        // ---------- Record rendering ----------
+        // Each record is a collapsible block: summary line with a preview,
+        // body with the full content, and the raw record as a JSON tree.
+
+        var OPEN_BY_DEFAULT = { text: true, plan_review: true, plan_feedback: true };
+
+        function preview(value) {
+            var text = typeof value === 'string' ? value : JSON.stringify(value);
+            text = (text || '').replace(/\s+/g, ' ').trim();
+            return text.length > 120 ? text.slice(0, 120) + '…' : text;
         }
 
-        function toolLabel(prefix, tool) {
-            var label = el('div', 'trace-label', prefix + ' ');
-            label.appendChild(el('span', 'tool-name', tool || ''));
-            return label;
+        function parseJson(text) {
+            if (typeof text !== 'string') return null;
+            var trimmed = text.trim();
+            if (trimmed.charAt(0) !== '{' && trimmed.charAt(0) !== '[') return null;
+            try { return JSON.parse(trimmed); } catch (e) { return null; }
         }
 
-        function renderToolInput(block, input) {
-            if (input && typeof input === 'object' && !Array.isArray(input)) {
-                Object.keys(input).forEach(function(key) {
-                    var value = input[key];
-                    var isCode = typeof value === 'string' && (CODE_KEYS.indexOf(key) >= 0 || value.indexOf('\n') >= 0);
-                    block.appendChild(el('div', 'trace-label', key));
-                    block.appendChild(el('div', isCode ? 'trace-pre code' : 'trace-pre',
-                        typeof value === 'string' ? value : JSON.stringify(value, null, 2)));
-                });
-                return;
+        // Collapsible JSON tree. Multi-line strings and code keys render as blocks.
+        function jsonTree(value, key, depth) {
+            depth = depth || 0;
+            var isObject = value && typeof value === 'object';
+            if (!isObject) {
+                var row = el('div', 'json-row');
+                if (key != null) row.appendChild(el('span', 'json-key', key + ': '));
+                if (typeof value === 'string' && (value.indexOf('\n') >= 0 || CODE_KEYS.indexOf(key) >= 0)) {
+                    row.appendChild(el('div', 'trace-pre code', value));
+                } else {
+                    var cls = 'json-' + (value === null ? 'null' : typeof value);
+                    row.appendChild(el('span', cls, typeof value === 'string' ? '"' + value + '"' : String(value)));
+                }
+                return row;
             }
-            block.appendChild(el('div', 'trace-pre code',
-                typeof input === 'string' ? input : JSON.stringify(input, null, 2)));
+            var isArray = Array.isArray(value);
+            var keys = Object.keys(value);
+            var node = el('details', 'json-node');
+            node.open = depth < 2;
+            var summary = el('summary');
+            if (key != null) summary.appendChild(el('span', 'json-key', key + ': '));
+            summary.appendChild(el('span', 'json-meta', isArray ? '[' + keys.length + ']' : '{' + keys.length + '}'));
+            node.appendChild(summary);
+            var children = el('div', 'json-children');
+            keys.forEach(function(k) { children.appendChild(jsonTree(value[k], isArray ? Number(k) : k, depth + 1)); });
+            node.appendChild(children);
+            return node;
         }
 
-        function renderToolOutput(block, output, codeShown) {
+        function recordBlock(r, labelNode, previewText, open) {
+            var block = el('details', 'record');
+            block.open = open;
+            var summary = el('summary', 'record-summary');
+            summary.appendChild(labelNode);
+            if (previewText) summary.appendChild(el('span', 'record-preview', previewText));
+            block.appendChild(summary);
+            var body = el('div', 'record-body');
+            block.appendChild(body);
+            block.raw = r;
+            return { block: block, body: body };
+        }
+
+        function appendRaw(body, r) {
+            var raw = el('details', 'record-raw');
+            raw.appendChild(el('summary', null, t('trace_raw_json')));
+            raw.appendChild(jsonTree(r, null, 1));
+            body.appendChild(raw);
+        }
+
+        function label(text, toolName) {
+            var node = el('span', 'record-label', text);
+            if (toolName) node.appendChild(el('span', 'tool-name', ' ' + toolName));
+            return node;
+        }
+
+        function renderToolOutput(body, output, codeShown) {
             // Code interpreter tools return "status||code||stdout"; the code is
             // skipped when the tool call above already shows it.
             var parts = typeof output === 'string' ? output.split('||') : [];
             if (parts.length === 3) {
-                block.appendChild(el('div', 'trace-label', t('trace_status') + ': ' + parts[0]));
+                body.appendChild(el('div', 'trace-label', t('trace_status') + ': ' + parts[0]));
                 if (parts[1].trim() && !codeShown) {
-                    block.appendChild(el('div', 'trace-label', t('trace_code')));
-                    block.appendChild(el('div', 'trace-pre code', parts[1]));
+                    body.appendChild(el('div', 'trace-label', t('trace_code')));
+                    body.appendChild(el('div', 'trace-pre code', parts[1]));
                 }
-                block.appendChild(el('div', 'trace-label', t('trace_output')));
-                block.appendChild(el('div', 'trace-pre', parts[2]));
+                body.appendChild(el('div', 'trace-label', t('trace_output')));
+                body.appendChild(el('div', 'trace-pre', parts[2]));
                 return;
             }
-            block.appendChild(el('div', 'trace-pre', output == null ? '' : String(output)));
+            var parsed = parseJson(output);
+            if (parsed) body.appendChild(jsonTree(parsed));
+            else body.appendChild(el('div', 'trace-pre', output == null ? '' : String(output)));
+        }
+
+        function decisionBadge(decision) {
+            var tone = decision === 'approved' ? 'ok' : decision === 'revision_requested' ? 'warn' : 'muted';
+            return el('span', 'decision decision-' + tone, t('hitl_' + decision));
+        }
+
+        function renderPlanFeedback(r) {
+            var labelNode = label(t('trace_plan_feedback') + ' (#' + ((r.revision_count || 0) + 1) + ')');
+            labelNode.appendChild(document.createTextNode(' '));
+            labelNode.appendChild(decisionBadge(r.decision));
+            var parts = recordBlock(r, labelNode, r.feedback ? '“' + preview(r.feedback) + '”' : '', true);
+            var card = el('div', 'hitl-card');
+            card.appendChild(el('div', 'trace-label', t('hitl_feedback')));
+            card.appendChild(el('div', r.feedback ? 'hitl-feedback' : 'section-empty', r.feedback || t('hitl_no_feedback')));
+            card.appendChild(el('div', 'trace-usage', t('hitl_waited') + ': ' + formatSeconds(r.waited_seconds || 0)));
+            parts.body.appendChild(card);
+            appendRaw(parts.body, r);
+            return parts.block;
         }
 
         function renderRecord(r, shownToolIds) {
-            if (r.kind === 'text') return textBlock(t('trace_text'), r.text);
-            if (r.kind === 'reasoning') return textBlock(t('trace_reasoning'), r.text, 'trace-text muted');
-            if (r.kind === 'plan_review') return textBlock(t('trace_plan') + ' (#' + (r.revision_count || 0) + ')', r.plan);
             if (r.kind === 'usage') {
                 return el('div', 'trace-block trace-usage',
                     t('trace_tokens') + ': in ' + formatTokens(r.input_tokens) + ' · out ' + formatTokens(r.output_tokens) +
                     ' · cache read ' + formatTokens(r.cache_read_input_tokens) +
                     ' · cache write ' + formatTokens(r.cache_write_input_tokens) + ' — ' + (r.model_id || ''));
             }
-            var block = el('div', 'trace-block');
-            if (r.kind === 'tool_use') {
-                block.appendChild(toolLabel(t('trace_tool_call'), r.tool));
-                renderToolInput(block, r.input);
+            if (r.kind === 'plan_feedback') return renderPlanFeedback(r);
+
+            var open = !!OPEN_BY_DEFAULT[r.kind];
+            var parts;
+            if (r.kind === 'text') {
+                parts = recordBlock(r, label(t('trace_text')), preview(r.text), open);
+                parts.body.appendChild(el('div', 'trace-text', r.text));
+            } else if (r.kind === 'reasoning') {
+                parts = recordBlock(r, label(t('trace_reasoning')), preview(r.text), open);
+                parts.body.appendChild(el('div', 'trace-text muted', r.text));
+            } else if (r.kind === 'plan_review') {
+                parts = recordBlock(r, label(t('trace_plan') + ' (#' + ((r.revision_count || 0) + 1) + ')'), preview(r.plan), open);
+                parts.body.appendChild(el('div', 'trace-text', r.plan));
+            } else if (r.kind === 'tool_use') {
+                var inputPreview = r.input && typeof r.input === 'object' ? preview(r.input.code || r.input.task || r.input) : preview(r.input);
+                parts = recordBlock(r, label(t('trace_tool_call'), r.tool), inputPreview, open);
+                if (r.input && typeof r.input === 'object') parts.body.appendChild(jsonTree(r.input));
+                else parts.body.appendChild(el('div', 'trace-pre code', r.input == null ? '' : String(r.input)));
                 if (r.tool_id) shownToolIds[r.tool_id] = true;
             } else if (r.kind === 'tool_result') {
-                block.appendChild(toolLabel(t('trace_tool_result'), r.tool));
-                renderToolOutput(block, r.output, !!shownToolIds[r.tool_id]);
+                // Code interpreter results ("status||code||stdout"): status badge + stdout preview
+                var out = typeof r.output === 'string' ? r.output.split('||') : [];
+                var resultLabel = label(t('trace_tool_result'), r.tool);
+                if (out.length === 3) {
+                    resultLabel.appendChild(document.createTextNode(' '));
+                    resultLabel.appendChild(el('span', 'decision ' + (out[0] === 'completed' ? 'decision-ok' : 'decision-fail'), out[0]));
+                }
+                parts = recordBlock(r, resultLabel, preview(out.length === 3 ? out[2] : r.output), open);
+                renderToolOutput(parts.body, r.output, !!shownToolIds[r.tool_id]);
             } else {
-                block.appendChild(el('div', 'trace-pre', JSON.stringify(r, null, 2)));
+                parts = recordBlock(r, label(r.kind), '', open);
             }
-            return block;
+            appendRaw(parts.body, r);
+            return parts.block;
+        }
+
+        function setAllOpen(container, open) {
+            container.querySelectorAll('details.record').forEach(function(d) { d.open = open; });
         }
 
         function renderStepDetail(container, step, index) {
@@ -713,10 +874,36 @@
             header.appendChild(el('span', 'agent-name', '#' + (index + 1) + ' ' + agentLabel(step.agent)));
             header.appendChild(el('span', 'section-meta',
                 formatSeconds(seconds(step.start, step.end)) + ' · ' + step.tools + ' ' + t('trace_tools')));
+            var actions = el('span', 'step-actions');
+            var expand = el('button', 'btn-link', t('trace_expand_all'));
+            expand.onclick = function() { setAllOpen(detail, true); };
+            var collapse = el('button', 'btn-link', t('trace_collapse_all'));
+            collapse.onclick = function() { setAllOpen(detail, false); };
+            actions.appendChild(expand);
+            actions.appendChild(collapse);
+            header.appendChild(actions);
             detail.appendChild(header);
             var shownToolIds = {};
             step.records.forEach(function(r) { detail.appendChild(renderRecord(r, shownToolIds)); });
             container.appendChild(detail);
+        }
+
+        // One line per plan review: what the user saw and what they answered
+        function renderHitlSummary(container, records) {
+            var results = records.filter(function(r) { return r.kind === 'plan_feedback'; });
+            if (!results.length) return;
+            var box = el('div', 'hitl-summary');
+            box.appendChild(el('div', 'subsection-title', t('hitl_title')));
+            results.forEach(function(r) {
+                var row = el('div', 'hitl-row');
+                row.appendChild(el('span', 'step-num', '#' + ((r.revision_count || 0) + 1)));
+                row.appendChild(decisionBadge(r.decision));
+                row.appendChild(el('span', r.feedback ? 'hitl-feedback-inline' : 'section-meta',
+                    r.feedback ? '“' + r.feedback + '”' : t('hitl_no_feedback')));
+                row.appendChild(el('span', 'section-meta', formatSeconds(r.waited_seconds || 0)));
+                box.appendChild(row);
+            });
+            container.appendChild(box);
         }
 
         function renderTrace() {
@@ -745,6 +932,7 @@
                 details.appendChild(el('div', 'query-text', input.prompt));
                 container.appendChild(details);
             }
+            renderHitlSummary(container, currentTrace.records);
 
             var flow = el('div', 'flow');
             steps.forEach(function(step, i) {
@@ -753,6 +941,7 @@
                 chip.style.setProperty('--agent-color', AGENT_COLORS[step.agent] || 'var(--accent)');
                 chip.appendChild(el('span', 'step-num', String(i + 1)));
                 chip.appendChild(el('span', null, agentLabel(step.agent)));
+                if (step.decision) chip.appendChild(decisionBadge(step.decision));
                 chip.appendChild(el('span', 'step-time', formatSeconds(seconds(step.start, step.end))));
                 chip.onclick = function() { selectedStep = i; renderTrace(); };
                 flow.appendChild(chip);
