@@ -147,6 +147,10 @@ def test_dataset_item_run_item_and_pairwise(tag_dir):
     _, trace_id, n_pw = sync(tag, fake)
     item = fake.items[ls.sid("item", "moon_market_kr_simple")]
     assert item["expectedOutput"]["pass"]["required_facts"] == ["total_revenue", "order_count", "avg_order_value"]
+    answers = {a["id"]: a for a in item["expectedOutput"]["answer_key"]}
+    assert answers["total_revenue"]["value"] == 16431923.0
+    ranking = next(a for a in answers.values() if a["kind"] == "ranking")   # rankings carry their order, not a value
+    assert ranking["order"] and "value" not in ranking
     assert fake.run_items == [{"runName": "baseline", "runDescription": "git abcdef1", "datasetItemId": item["id"], "traceId": trace_id}]
     pw = [e["body"] for e in fake.events if e["body"].get("datasetRunId")]
     assert n_pw == 1 and pw[0]["datasetRunId"] == "run-baseline" and pw[0]["value"] == 0.5

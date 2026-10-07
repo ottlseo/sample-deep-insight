@@ -51,7 +51,10 @@ NUMERIC_SCORES = [
     "recompute_supported", "recompute_lenient", "citation_coverage", "facts_found", "other_facts_found",
     "broken_citation_refs", "audit_block_findings", "cost_usd", "cache_hit_rate", "duration_s",
     "time_to_first_plan_s", "code_exec_failed", "code_executions", "judge_requirement_coverage",
-    "judge_score_mean",
+    "judge_score_mean", "judge_cost_usd",
+    # LLM fact check against the answer key (factcheck.py)
+    "factcheck_statements", "factcheck_wrong_confirmed", "factcheck_needs_review", "factcheck_out_of_scope",
+    "factcheck_unit_issues", "factcheck_unverified_quotes", "factcheck_cost_usd",
 ]
 BOOLEAN_SCORES = ["core_pass", "all_required_ok", "citations_ok", "audit_pass"]
 
@@ -130,9 +133,18 @@ def ensure_dataset_items(lf, scenarios):
             "datasetName": DATASET, "id": sid("item", name),
             "input": {"scenario": name, "query": s["query"].strip(), "data_directory": s["data_directory"]},
             "expectedOutput": {"requirements": s.get("requirements", []), "pass": s.get("pass", {}),
-                               "answer_key": [{"id": f["id"], "value": f["value"]} for f in key["facts"]]},
+                               "answer_key": [_answer(f) for f in key["facts"]]},
             "metadata": {"holdout": bool(s.get("holdout")), "hitl": s.get("hitl") or []},
         })
+
+
+def _answer(fact):
+    """A fact's answer by kind: a value, a ranking order, or a relation."""
+    out = {"id": fact["id"], "kind": fact.get("kind", "value")}
+    for k in ("value", "order", "relation", "unit", "scope"):
+        if k in fact:
+            out[k] = fact[k]
+    return out
 
 
 # --- one run → events -------------------------------------------------------------
@@ -166,7 +178,8 @@ def run_events(run_dir, tag, configs):
         "metadata": {"run_dir": f"{tag}/{run_dir.name}", "status": meta.get("status"), "core_fail_reasons": scores.get("core_fail_reasons"),
                      "models": config.get("models"), "runtime_version": config.get("runtime_version"), "git_sha": config.get("git_sha"),
                      "session_id": meta.get("session_id"), "agent_calls": meta.get("agent_calls"), "warning": meta.get("warning"),
-                     "judge_summary": (judge or {}).get("verdict", {}).get("summary")},
+                     "judge_summary": (judge or {}).get("verdict", {}).get("summary"),
+                     "factcheck_version": scores.get("factcheck_version"), "factcheck_skipped": scores.get("factcheck_skipped")},
     }, sid("ev", trace_id, "trace"))]
 
     # one generation per agent: tokens, cost, first-to-last event span
@@ -200,7 +213,8 @@ def run_events(run_dir, tag, configs):
     for k in NUMERIC_SCORES:
         v = scores.get(k)
         if isinstance(v, (int, float)) and not isinstance(v, bool):
-            score(k, float(v), "NUMERIC")
+            wrong = ", ".join(scores.get("factcheck_wrong_ids") or []) if k == "factcheck_wrong_confirmed" else None
+            score(k, float(v), "NUMERIC", comment=wrong or None)
     if judge:
         v = judge["verdict"]
         for c in v.get("criteria", []):
