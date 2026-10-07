@@ -85,7 +85,8 @@
             transition: all 0.2s;
         }
         .lang-toggle:hover { color: var(--text-primary); border-color: var(--accent); background: rgba(74, 124, 255, 0.2); }
-        .content { padding: 2rem; max-width: 800px; }
+        .content { padding: 2rem; max-width: 1200px; }
+        .content > .detail-card { max-width: 800px; }
         .back-link {
             display: inline-flex;
             align-items: center;
@@ -162,6 +163,144 @@
         .report-link:hover { text-decoration: underline; }
         .error-text { color: var(--red); }
         .loading { text-align: center; color: var(--text-muted); padding: 3rem; font-size: 1rem; }
+
+        /* Files and trace sections */
+        .section {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 1.5rem;
+            margin-top: 1.5rem;
+        }
+        .section-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 1rem;
+            margin-bottom: 1rem;
+        }
+        .section-title { font-size: 1.05rem; font-weight: 700; }
+        .section-meta { color: var(--text-muted); font-size: 0.85rem; }
+        .section-empty { color: var(--text-muted); font-size: 0.9rem; }
+        .subsection-title {
+            color: var(--text-muted);
+            font-size: 0.8rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            margin: 1.2rem 0 0.6rem;
+        }
+        .btn-primary {
+            padding: 0.45rem 1rem;
+            background: var(--accent);
+            color: #fff;
+            border-radius: var(--radius-xs);
+            font-size: 0.85rem;
+            font-weight: 600;
+            text-decoration: none;
+            white-space: nowrap;
+        }
+        .btn-primary:hover { background: var(--accent-hover); }
+        .image-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 0.8rem;
+        }
+        .image-tile {
+            display: block;
+            background: var(--bg-elevated);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            overflow: hidden;
+            text-decoration: none;
+            color: var(--text-muted);
+            transition: border-color 0.2s;
+        }
+        .image-tile:hover { border-color: var(--accent); }
+        .image-tile img { display: block; width: 100%; height: 150px; object-fit: contain; background: #fff; }
+        .image-tile span {
+            display: block;
+            padding: 0.4rem 0.6rem;
+            font-family: var(--font-mono);
+            font-size: 0.72rem;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .file-row {
+            display: flex;
+            justify-content: space-between;
+            gap: 1rem;
+            padding: 0.4rem 0;
+            border-bottom: 1px solid var(--border);
+            font-family: var(--font-mono);
+            font-size: 0.8rem;
+        }
+        .file-row:last-child { border-bottom: none; }
+        .file-size { color: var(--text-muted); white-space: nowrap; }
+        .flow {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 0.35rem;
+        }
+        .flow-arrow { color: var(--text-muted); font-size: 0.8rem; }
+        .step-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+            padding: 0.3rem 0.6rem;
+            background: var(--bg-elevated);
+            border: 1px solid var(--border);
+            border-left: 3px solid var(--agent-color, var(--accent));
+            border-radius: var(--radius-xs);
+            color: var(--text-secondary);
+            font-family: var(--font-display);
+            font-size: 0.8rem;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .step-chip:hover { border-color: var(--border-hover); }
+        .step-chip.selected { background: var(--accent-glow); border-color: var(--accent); color: var(--text-primary); }
+        .step-chip .step-num { color: var(--text-muted); font-family: var(--font-mono); font-size: 0.7rem; }
+        .step-chip .step-time { color: var(--text-muted); font-size: 0.72rem; }
+        .step-detail {
+            margin-top: 1.2rem;
+            border-top: 1px solid var(--border);
+            padding-top: 1.2rem;
+        }
+        .step-detail-header { display: flex; align-items: baseline; gap: 0.8rem; margin-bottom: 0.8rem; }
+        .agent-name { font-weight: 700; color: var(--agent-color, var(--accent)); }
+        .trace-block { margin-bottom: 0.9rem; }
+        .trace-label {
+            font-size: 0.75rem;
+            font-weight: 600;
+            color: var(--text-muted);
+            margin-bottom: 0.3rem;
+        }
+        .trace-label .tool-name { color: var(--amber); font-family: var(--font-mono); }
+        .trace-text, .trace-pre {
+            background: var(--bg-elevated);
+            border-radius: var(--radius-sm);
+            padding: 0.7rem 0.9rem;
+            font-size: 0.85rem;
+            line-height: 1.55;
+            white-space: pre-wrap;
+            word-break: break-word;
+            max-height: 480px;
+            overflow: auto;
+        }
+        .trace-pre {
+            font-family: var(--font-mono);
+            font-size: 0.76rem;
+            line-height: 1.5;
+            color: var(--text-secondary);
+        }
+        .trace-pre.code { background: #0a0c10; border: 1px solid var(--border); }
+        .trace-text.muted { color: var(--text-muted); font-style: italic; }
+        .trace-usage { font-family: var(--font-mono); font-size: 0.75rem; color: var(--text-muted); }
+        details.full-prompt { margin-bottom: 1rem; }
+        details.full-prompt summary { cursor: pointer; color: var(--text-muted); font-size: 0.85rem; margin-bottom: 0.5rem; }
     </style>
 </head>
 <body>
@@ -184,6 +323,8 @@
     <div class="content">
         <a href="/admin/dashboard" class="back-link" data-i18n="back_all_jobs">Back to all jobs</a>
         <div id="jobDetail" class="loading" data-i18n="detail_loading">Loading job details...</div>
+        <div id="filesSection"></div>
+        <div id="traceSection"></div>
     </div>
 
     <script src="/admin/static/admin-i18n.js"></script>
@@ -316,7 +457,7 @@
                 var link = document.createElement('a');
                 link.className = 'report-link';
                 link.textContent = job.report_filename;
-                link.href = '/download/' + encodeURIComponent(job.session_id) + '/' + encodeURIComponent(job.report_filename);
+                link.href = fileUrl('artifacts', job.report_filename, true);
                 addRow(wrapper, t('label_report'), link);
             } else {
                 addMonoRow(wrapper, t('label_report'), job.report_filename || '-');
@@ -331,12 +472,313 @@
             }
         }
 
-        async function fetchJob() {
-            var pathParts = window.location.pathname.split('/');
-            var jobId = pathParts[pathParts.length - 1];
+        // ---------- Files ----------
 
+        var IMAGE_EXT = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg'];
+        var currentFiles = null;
+        var currentTrace = null;
+        var selectedStep = 0;
+
+        function jobId() {
+            var parts = window.location.pathname.split('/');
+            return parts[parts.length - 1];
+        }
+
+        function fileUrl(area, name, download) {
+            var path = name.split('/').map(encodeURIComponent).join('/');
+            return '/admin/api/jobs/' + encodeURIComponent(jobId()) + '/files/' + area + '/' + path +
+                (download ? '?download=true' : '');
+        }
+
+        function isImage(name) {
+            var lower = name.toLowerCase();
+            return IMAGE_EXT.some(function(ext) { return lower.endsWith(ext); });
+        }
+
+        function formatSize(bytes) {
+            if (bytes < 1024) return bytes + ' B';
+            if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+            return (bytes / 1024 / 1024).toFixed(1) + ' MB';
+        }
+
+        function el(tag, className, text) {
+            var node = document.createElement(tag);
+            if (className) node.className = className;
+            if (text != null) node.textContent = text;
+            return node;
+        }
+
+        function sectionShell(container, titleKey, metaText) {
+            container.className = 'section';
+            container.replaceChildren();
+            var header = el('div', 'section-header');
+            var left = el('div');
+            left.appendChild(el('div', 'section-title', t(titleKey)));
+            if (metaText) left.appendChild(el('div', 'section-meta', metaText));
+            header.appendChild(left);
+            container.appendChild(header);
+            return header;
+        }
+
+        function renderFileList(container, area, files) {
+            if (!files.length) {
+                container.appendChild(el('div', 'section-empty', t('files_none')));
+                return;
+            }
+            files.forEach(function(f) {
+                var row = el('div', 'file-row');
+                var link = el('a', 'report-link', f.name);
+                link.href = fileUrl(area, f.name, true);
+                row.appendChild(link);
+                row.appendChild(el('span', 'file-size', formatSize(f.size)));
+                container.appendChild(row);
+            });
+        }
+
+        function renderFiles() {
+            var container = document.getElementById('filesSection');
+            if (!currentFiles) return;
+            if (currentFiles.error) {
+                sectionShell(container, 'files_title');
+                container.appendChild(el('div', 'section-empty', t('files_load_error')));
+                return;
+            }
+            var header = sectionShell(container, 'files_title');
+            if (currentJob && currentJob.report_filename && currentJob.session_id) {
+                var btn = el('a', 'btn-primary', t('files_download_report'));
+                btn.href = fileUrl('artifacts', currentJob.report_filename, true);
+                header.appendChild(btn);
+            }
+
+            var images = currentFiles.artifacts.filter(function(f) { return isImage(f.name); });
+            var others = currentFiles.artifacts.filter(function(f) { return !isImage(f.name); });
+
+            container.appendChild(el('div', 'subsection-title', t('files_images') + ' (' + images.length + ')'));
+            if (images.length) {
+                var grid = el('div', 'image-grid');
+                images.forEach(function(f) {
+                    var tile = el('a', 'image-tile');
+                    tile.href = fileUrl('artifacts', f.name, false);
+                    tile.target = '_blank';
+                    tile.rel = 'noopener';
+                    var img = el('img');
+                    img.src = tile.href;
+                    img.loading = 'lazy';
+                    img.alt = f.name;
+                    tile.appendChild(img);
+                    tile.appendChild(el('span', null, f.name));
+                    grid.appendChild(tile);
+                });
+                container.appendChild(grid);
+            } else {
+                container.appendChild(el('div', 'section-empty', t('files_none')));
+            }
+
+            container.appendChild(el('div', 'subsection-title', t('files_artifacts') + ' (' + others.length + ')'));
+            renderFileList(container, 'artifacts', others);
+            container.appendChild(el('div', 'subsection-title', t('files_input') + ' (' + currentFiles.input.length + ')'));
+            renderFileList(container, 'input', currentFiles.input);
+        }
+
+        async function fetchFiles() {
+            var container = document.getElementById('filesSection');
+            sectionShell(container, 'files_title');
+            container.appendChild(el('div', 'section-empty', t('files_loading')));
             try {
-                var res = await fetch('/admin/api/jobs/' + encodeURIComponent(jobId));
+                var res = await fetch('/admin/api/jobs/' + encodeURIComponent(jobId()) + '/files');
+                var data = await res.json();
+                currentFiles = data.success ? data : { error: true };
+            } catch (e) {
+                currentFiles = { error: true };
+            }
+            renderFiles();
+        }
+
+        // ---------- Agent trace ----------
+
+        var AGENT_COLORS = {
+            coordinator: '#a78bfa', planner: '#4a7cff', plan_reviewer: '#fbbf24', supervisor: '#f472b6',
+            coder: '#34d399', validator: '#22d3ee', reporter: '#fb923c', tracker: '#94a3b8', auditor: '#f87171'
+        };
+        // Keys whose string values are code or file content
+        var CODE_KEYS = ['code', 'content', 'cmd', 'command', 'script'];
+
+        function agentLabel(agent) {
+            return agent.split('_').map(function(w) { return w.charAt(0).toUpperCase() + w.slice(1); }).join(' ');
+        }
+
+        function seconds(fromIso, toIso) {
+            var d = (Date.parse(toIso) - Date.parse(fromIso)) / 1000;
+            return isNaN(d) ? 0 : d;
+        }
+
+        function formatSeconds(s) {
+            if (s < 1) return '<1s';
+            if (s < 60) return s.toFixed(0) + 's';
+            return Math.floor(s / 60) + 'm ' + Math.round(s % 60) + 's';
+        }
+
+        // Consecutive records of one agent form a step. A Supervisor that calls
+        // the Coder shows as Supervisor -> Coder -> Supervisor, in run order.
+        function buildSteps(records) {
+            var steps = [];
+            records.forEach(function(r) {
+                if (r.kind === 'input') return;
+                var agent = r.agent || 'system';
+                var last = steps[steps.length - 1];
+                if (!last || last.agent !== agent) {
+                    last = { agent: agent, records: [], start: r.ts, end: r.ts, tools: 0 };
+                    steps.push(last);
+                }
+                last.records.push(r);
+                last.end = r.end_ts || r.ts;
+                if (r.kind === 'tool_use') last.tools++;
+            });
+            return steps;
+        }
+
+        function textBlock(label, text, className) {
+            var block = el('div', 'trace-block');
+            block.appendChild(el('div', 'trace-label', label));
+            block.appendChild(el('div', className || 'trace-text', text));
+            return block;
+        }
+
+        function toolLabel(prefix, tool) {
+            var label = el('div', 'trace-label', prefix + ' ');
+            label.appendChild(el('span', 'tool-name', tool || ''));
+            return label;
+        }
+
+        function renderToolInput(block, input) {
+            if (input && typeof input === 'object' && !Array.isArray(input)) {
+                Object.keys(input).forEach(function(key) {
+                    var value = input[key];
+                    var isCode = typeof value === 'string' && (CODE_KEYS.indexOf(key) >= 0 || value.indexOf('\n') >= 0);
+                    block.appendChild(el('div', 'trace-label', key));
+                    block.appendChild(el('div', isCode ? 'trace-pre code' : 'trace-pre',
+                        typeof value === 'string' ? value : JSON.stringify(value, null, 2)));
+                });
+                return;
+            }
+            block.appendChild(el('div', 'trace-pre code',
+                typeof input === 'string' ? input : JSON.stringify(input, null, 2)));
+        }
+
+        function renderToolOutput(block, output, codeShown) {
+            // Code interpreter tools return "status||code||stdout"; the code is
+            // skipped when the tool call above already shows it.
+            var parts = typeof output === 'string' ? output.split('||') : [];
+            if (parts.length === 3) {
+                block.appendChild(el('div', 'trace-label', t('trace_status') + ': ' + parts[0]));
+                if (parts[1].trim() && !codeShown) {
+                    block.appendChild(el('div', 'trace-label', t('trace_code')));
+                    block.appendChild(el('div', 'trace-pre code', parts[1]));
+                }
+                block.appendChild(el('div', 'trace-label', t('trace_output')));
+                block.appendChild(el('div', 'trace-pre', parts[2]));
+                return;
+            }
+            block.appendChild(el('div', 'trace-pre', output == null ? '' : String(output)));
+        }
+
+        function renderRecord(r, shownToolIds) {
+            if (r.kind === 'text') return textBlock(t('trace_text'), r.text);
+            if (r.kind === 'reasoning') return textBlock(t('trace_reasoning'), r.text, 'trace-text muted');
+            if (r.kind === 'plan_review') return textBlock(t('trace_plan') + ' (#' + (r.revision_count || 0) + ')', r.plan);
+            if (r.kind === 'usage') {
+                return el('div', 'trace-block trace-usage',
+                    t('trace_tokens') + ': in ' + formatTokens(r.input_tokens) + ' · out ' + formatTokens(r.output_tokens) +
+                    ' · cache read ' + formatTokens(r.cache_read_input_tokens) +
+                    ' · cache write ' + formatTokens(r.cache_write_input_tokens) + ' — ' + (r.model_id || ''));
+            }
+            var block = el('div', 'trace-block');
+            if (r.kind === 'tool_use') {
+                block.appendChild(toolLabel(t('trace_tool_call'), r.tool));
+                renderToolInput(block, r.input);
+                if (r.tool_id) shownToolIds[r.tool_id] = true;
+            } else if (r.kind === 'tool_result') {
+                block.appendChild(toolLabel(t('trace_tool_result'), r.tool));
+                renderToolOutput(block, r.output, !!shownToolIds[r.tool_id]);
+            } else {
+                block.appendChild(el('div', 'trace-pre', JSON.stringify(r, null, 2)));
+            }
+            return block;
+        }
+
+        function renderStepDetail(container, step, index) {
+            var detail = el('div', 'step-detail');
+            detail.style.setProperty('--agent-color', AGENT_COLORS[step.agent] || 'var(--accent)');
+            var header = el('div', 'step-detail-header');
+            header.appendChild(el('span', 'agent-name', '#' + (index + 1) + ' ' + agentLabel(step.agent)));
+            header.appendChild(el('span', 'section-meta',
+                formatSeconds(seconds(step.start, step.end)) + ' · ' + step.tools + ' ' + t('trace_tools')));
+            detail.appendChild(header);
+            var shownToolIds = {};
+            step.records.forEach(function(r) { detail.appendChild(renderRecord(r, shownToolIds)); });
+            container.appendChild(detail);
+        }
+
+        function renderTrace() {
+            var container = document.getElementById('traceSection');
+            if (!currentTrace) return;
+            if (currentTrace.error) {
+                sectionShell(container, 'trace_title');
+                container.appendChild(el('div', 'section-empty', t('trace_load_error')));
+                return;
+            }
+            if (!currentTrace.available) {
+                sectionShell(container, 'trace_title');
+                container.appendChild(el('div', 'section-empty', t('trace_unavailable')));
+                return;
+            }
+
+            var steps = buildSteps(currentTrace.records);
+            var tools = steps.reduce(function(n, s) { return n + s.tools; }, 0);
+            sectionShell(container, 'trace_title',
+                steps.length + ' ' + t('trace_steps') + ' · ' + tools + ' ' + t('trace_tools') + ' · ' + t('trace_hint'));
+
+            var input = currentTrace.records.find(function(r) { return r.kind === 'input'; });
+            if (input && input.prompt) {
+                var details = el('details', 'full-prompt');
+                details.appendChild(el('summary', null, t('trace_full_prompt')));
+                details.appendChild(el('div', 'query-text', input.prompt));
+                container.appendChild(details);
+            }
+
+            var flow = el('div', 'flow');
+            steps.forEach(function(step, i) {
+                if (i > 0) flow.appendChild(el('span', 'flow-arrow', '→'));
+                var chip = el('button', 'step-chip' + (i === selectedStep ? ' selected' : ''));
+                chip.style.setProperty('--agent-color', AGENT_COLORS[step.agent] || 'var(--accent)');
+                chip.appendChild(el('span', 'step-num', String(i + 1)));
+                chip.appendChild(el('span', null, agentLabel(step.agent)));
+                chip.appendChild(el('span', 'step-time', formatSeconds(seconds(step.start, step.end))));
+                chip.onclick = function() { selectedStep = i; renderTrace(); };
+                flow.appendChild(chip);
+            });
+            container.appendChild(flow);
+
+            if (steps[selectedStep]) renderStepDetail(container, steps[selectedStep], selectedStep);
+        }
+
+        async function fetchTrace() {
+            var container = document.getElementById('traceSection');
+            sectionShell(container, 'trace_title');
+            container.appendChild(el('div', 'section-empty', t('trace_loading')));
+            try {
+                var res = await fetch('/admin/api/jobs/' + encodeURIComponent(jobId()) + '/trace');
+                var data = await res.json();
+                currentTrace = data.success ? data : { error: true };
+            } catch (e) {
+                currentTrace = { error: true };
+            }
+            renderTrace();
+        }
+
+        async function fetchJob() {
+            try {
+                var res = await fetch('/admin/api/jobs/' + encodeURIComponent(jobId()));
                 if (res.status === 401) {
                     window.location.href = '/admin/login';
                     return;
@@ -346,6 +788,8 @@
                     currentJob = data.job;
                     renderJob(currentJob);
                     document.title = 'Deep Insight — Job ' + (currentJob.status || '');
+                    fetchFiles();
+                    fetchTrace();
                 } else {
                     var wrapper = document.getElementById('jobDetail');
                     wrapper.className = 'loading';
@@ -366,6 +810,8 @@
         // Re-render detail when language changes
         function onLangChange() {
             if (currentJob) renderJob(currentJob);
+            renderFiles();
+            renderTrace();
         }
 
         applyAdminLang();
