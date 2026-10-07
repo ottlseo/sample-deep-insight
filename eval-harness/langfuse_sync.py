@@ -424,7 +424,7 @@ def main():
             events += ev
             linked.append((trace_id, scenario, repeat_of(r), started))
             configs_seen.add((str(config.get("git_sha", ""))[:7], str(config.get("runtime_version"))))
-            current[trace_id] = {"run_dir": str(r.resolve().relative_to(HERE)), "tag": tag, "scenario": scenario}
+            current[trace_id] = {"run_dir": os.path.relpath(os.path.abspath(r), HERE), "tag": tag, "scenario": scenario}
         lf.ingest(events)
         reset_dataset_run(lf, tag, pairwise_names(tag_dir))
         desc = "; ".join(f"git {g} runtime v{v}" for g, v in sorted(configs_seen))
