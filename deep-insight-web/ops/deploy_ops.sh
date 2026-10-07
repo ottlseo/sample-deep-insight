@@ -56,6 +56,7 @@ DYNAMODB_TABLE="deep-insight-jobs"
 SNS_TOPIC_NAME="deep-insight-job-notifications"
 LAMBDA_FUNC_NAME="deep-insight-job-complete"
 LAMBDA_ROLE_NAME="deep-insight-ops-lambda-role"
+SWEEP_RULE_NAME="deep-insight-stale-job-sweep"
 OPS_POLICY_NAME="deep-insight-ops-dynamodb-sns-policy"
 COGNITO_POOL_NAME="deep-insight-ops-admins"
 
@@ -109,6 +110,11 @@ json.dump(config, sys.stdout)
         --bucket "$S3_BUCKET" \
         --notification-configuration "$CLEANED_CONFIG" \
         --region "$REGION" 2>/dev/null || true
+
+    echo "Deleting stale job sweep schedule..."
+    aws events remove-targets --rule "$SWEEP_RULE_NAME" --ids "$LAMBDA_FUNC_NAME" \
+        --region "$REGION" 2>/dev/null || true
+    aws events delete-rule --name "$SWEEP_RULE_NAME" --region "$REGION" 2>/dev/null || true
 
     echo "Deleting Lambda function..."
     aws lambda delete-function --function-name "$LAMBDA_FUNC_NAME" \
@@ -337,64 +343,91 @@ echo "=== Step 6: S3 Event Notification ==="
 
 LAMBDA_ARN="arn:aws:lambda:${REGION}:${ACCOUNT_ID}:function:${LAMBDA_FUNC_NAME}"
 
-# Check if our notification already exists
+# Two triggers on one Lambda:
+#   job_status.json  — written by the runtime on every exit path (success,
+#                      failure, client disconnect); updates the job by job_id
+#   token_usage.json — runtimes that predate job_status.json
 EXISTING_CONFIG=$(aws s3api get-bucket-notification-configuration \
     --bucket "$S3_BUCKET" --region "$REGION" 2>/dev/null || true)
 [ -z "$EXISTING_CONFIG" ] && EXISTING_CONFIG="{}"
 
-HAS_OUR_NOTIFICATION=$(echo "$EXISTING_CONFIG" | python3 -c "
+# Grant S3 permission to invoke Lambda
+aws lambda add-permission \
+    --function-name "$LAMBDA_FUNC_NAME" \
+    --statement-id "s3-invoke-${LAMBDA_FUNC_NAME}" \
+    --action lambda:InvokeFunction \
+    --principal s3.amazonaws.com \
+    --source-arn "arn:aws:s3:::${S3_BUCKET}" \
+    --source-account "$ACCOUNT_ID" \
+    --region "$REGION" > /dev/null 2>&1 || true
+
+# Add whichever of our notifications is missing; prints nothing if none is
+MERGED_CONFIG=$(echo "$EXISTING_CONFIG" | python3 -c "
 import sys, json
 config = json.load(sys.stdin)
-for lc in config.get('LambdaFunctionConfigurations', []):
-    if '${LAMBDA_FUNC_NAME}' in lc.get('LambdaFunctionArn', ''):
-        print('yes')
-        sys.exit(0)
-print('no')
-")
-
-if [ "$HAS_OUR_NOTIFICATION" = "yes" ]; then
-    echo "S3 Event: notification already configured"
-else
-    # Grant S3 permission to invoke Lambda
-    aws lambda add-permission \
-        --function-name "$LAMBDA_FUNC_NAME" \
-        --statement-id "s3-invoke-${LAMBDA_FUNC_NAME}" \
-        --action lambda:InvokeFunction \
-        --principal s3.amazonaws.com \
-        --source-arn "arn:aws:s3:::${S3_BUCKET}" \
-        --source-account "$ACCOUNT_ID" \
-        --region "$REGION" 2>/dev/null || true
-
-    # Merge our notification with existing config
-    MERGED_CONFIG=$(echo "$EXISTING_CONFIG" | python3 -c "
-import sys, json
-config = json.load(sys.stdin)
-new_notification = {
-    'Id': 'deep-insight-job-complete',
-    'LambdaFunctionArn': '${LAMBDA_ARN}',
-    'Events': ['s3:ObjectCreated:*'],
-    'Filter': {
-        'Key': {
-            'FilterRules': [
-                {'Name': 'prefix', 'Value': 'deep-insight/fargate_sessions/'},
-                {'Name': 'suffix', 'Value': 'token_usage.json'}
-            ]
-        }
-    }
-}
 lc = config.get('LambdaFunctionConfigurations', [])
-lc.append(new_notification)
-config['LambdaFunctionConfigurations'] = lc
-json.dump(config, sys.stdout)
+existing = {c.get('Id') for c in lc}
+added = []
+for notification_id, suffix in [('deep-insight-job-complete', 'token_usage.json'),
+                                ('deep-insight-job-status', 'job_status.json')]:
+    if notification_id in existing:
+        continue
+    lc.append({
+        'Id': notification_id,
+        'LambdaFunctionArn': '${LAMBDA_ARN}',
+        'Events': ['s3:ObjectCreated:*'],
+        'Filter': {
+            'Key': {
+                'FilterRules': [
+                    {'Name': 'prefix', 'Value': 'deep-insight/fargate_sessions/'},
+                    {'Name': 'suffix', 'Value': suffix}
+                ]
+            }
+        }
+    })
+    added.append(suffix)
+if added:
+    config['LambdaFunctionConfigurations'] = lc
+    print(json.dumps(config))
+    print('S3 Event: notification added for ' + ', '.join(added), file=sys.stderr)
 ")
 
+if [ -n "$MERGED_CONFIG" ]; then
     aws s3api put-bucket-notification-configuration \
         --bucket "$S3_BUCKET" \
         --notification-configuration "$MERGED_CONFIG" \
         --region "$REGION"
-
-    echo "S3 Event: notification added (prefix=deep-insight/fargate_sessions/, suffix=token_usage.json)"
+else
+    echo "S3 Event: notifications already configured (token_usage.json, job_status.json)"
 fi
+
+# ---------- Step 6b: Stale Job Sweep Schedule ----------
+
+# Marks jobs still in Start after STALE_JOB_MINUTES (Lambda env, default 120)
+# as Failed: a runtime that dies without writing job_status.json.
+echo "=== Step 6b: Stale Job Sweep Schedule ==="
+
+SWEEP_RULE_ARN=$(aws events put-rule \
+    --name "$SWEEP_RULE_NAME" \
+    --schedule-expression "rate(15 minutes)" \
+    --description "Mark Deep Insight jobs that never reported a final status as Failed" \
+    --region "$REGION" \
+    --query "RuleArn" --output text)
+
+aws lambda add-permission \
+    --function-name "$LAMBDA_FUNC_NAME" \
+    --statement-id "events-invoke-${LAMBDA_FUNC_NAME}" \
+    --action lambda:InvokeFunction \
+    --principal events.amazonaws.com \
+    --source-arn "$SWEEP_RULE_ARN" \
+    --region "$REGION" > /dev/null 2>&1 || true
+
+aws events put-targets \
+    --rule "$SWEEP_RULE_NAME" \
+    --targets "Id=${LAMBDA_FUNC_NAME},Arn=${LAMBDA_ARN}" \
+    --region "$REGION" > /dev/null
+
+echo "Schedule: ${SWEEP_RULE_NAME} (rate 15 minutes)"
 
 # ---------- Step 7: DynamoDB + SNS Policy on Web Task Role ----------
 
@@ -424,6 +457,12 @@ OPS_TASK_POLICY=$(cat <<POLICY
             "Effect": "Allow",
             "Action": "sns:Publish",
             "Resource": "${SNS_TOPIC_ARN}"
+        },
+        {
+            "Sid": "S3JobTraceRead",
+            "Effect": "Allow",
+            "Action": "s3:GetObject",
+            "Resource": "arn:aws:s3:::${S3_BUCKET}/deep-insight/fargate_sessions/*/output/*"
         }
     ]
 }
@@ -668,6 +707,7 @@ echo "Resources:"
 echo "  DynamoDB Table:     ${DYNAMODB_TABLE}"
 echo "  SNS Topic ARN:      ${SNS_TOPIC_ARN}"
 echo "  Lambda Function:    ${LAMBDA_FUNC_NAME}"
+echo "  Sweep Schedule:     ${SWEEP_RULE_NAME}"
 echo "  Cognito User Pool:  ${COGNITO_POOL_ID}"
 echo "  Cognito Client ID:  ${COGNITO_CLIENT_ID}"
 echo ""
