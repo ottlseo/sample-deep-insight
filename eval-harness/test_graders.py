@@ -203,3 +203,42 @@ def test_parse_numbers(text, value):
 ])
 def test_matches(printed, decimals, stored, ok):
     assert matches(printed, decimals, stored) is ok
+
+
+# --- general expressions: shapes agents wrote in real runs -------------------------
+
+@pytest.mark.parametrize("formula, description, expected", [
+    ("SUM(Amount WHERE promotion-ids IS NULL)", "", lambda d: d[d["promotion-ids"].isna()].Amount.sum()),
+    ("MEAN(Amount WHERE promotion-ids NOT NULL)", "", lambda d: d[d["promotion-ids"].notna()].Amount.mean()),
+    ("SUM(Amount) WHERE Category=='건강식품'", "", lambda d: d[d.Category == "건강식품"].Amount.sum()),
+    ("SUM(Amount WHERE Category=='건강식품') / SUM(Amount) * 100", "", lambda d: d[d.Category == "건강식품"].Amount.sum() / d.Amount.sum() * 100),
+    ("SUM(Amount|category)/SUM(Amount)*100", "건강식품 매출 비중", lambda d: d[d.Category == "건강식품"].Amount.sum() / d.Amount.sum() * 100),
+    ("SUM(Amount|cat) / SUM(Amount|all)", "건강식품 비중", lambda d: d[d.Category == "건강식품"].Amount.sum() / d.Amount.sum()),
+    ("SUM(Amount WHERE Category==X) / SUM(Amount) * 100", "건강식품 비중", lambda d: d[d.Category == "건강식품"].Amount.sum() / d.Amount.sum() * 100),
+    ("SUM(Amount WHERE Category=='건강식품') / COUNT(rows WHERE Category=='건강식품')", "", lambda d: d[d.Category == "건강식품"].Amount.mean()),
+    ("STD(Amount)/MEAN(Amount)*100", "", lambda d: d.Amount.std() / d.Amount.mean() * 100),
+    ("SUM(Amount WHERE Product='{}')", "미역국 매출", lambda d: d[d.Product == "미역국"].Amount.sum()),
+    ("MAX(SUM(Amount) grouped by Age Group, Category)", "50대 최선호 카테고리(간편식/밀키트/샐러드) 매출",
+     lambda d: d[(d["Age Group"] == "50대") & (d.Category == "간편식/밀키트/샐러드")].Amount.sum()),
+])
+def test_general_expressions(df, formula, description, expected):
+    r = recompute.recompute(formula, df, description)
+    assert r is not None and r["lenient"] is False
+    assert r["value"] == pytest.approx(float(expected(df)), rel=1e-9)
+
+
+@pytest.mark.parametrize("formula", ["cat_sales/total_sales*100", "STD(daily_sum)/MEAN(daily_sum)*100", "SUM(Amount WHERE seg)/SUM(Amount)",
+                                     "__import__('os').system('x')", "SUM(Amount) + foo"])
+def test_names_the_agent_made_up_stay_unsupported(df, formula):
+    assert recompute.recompute(formula, df, "") is None
+
+
+def test_unnamed_group_that_matches_nothing_is_unverified_not_wrong(clean, scenario):
+    """'MEAN(Amount|weekday)' for 'weekdays' (Mon-Fri) matches no single weekday: unverified, not a mismatch."""
+    path = clean / "artifacts" / "calculation_metadata.json"
+    data = json.loads(path.read_text())
+    data["calculations"].append({"id": "calc_weekdays", "value": 19464.17, "description": "Average order value on weekdays",
+                                 "formula": "MEAN(Amount|weekday)", "source_file": data["calculations"][0]["source_file"]})
+    path.write_text(json.dumps(data, ensure_ascii=False))
+    s = grade(clean, scenario)
+    assert s["recompute_match_rate"] == 1.0 and s["recompute_unverified"] == 1

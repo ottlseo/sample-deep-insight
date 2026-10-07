@@ -18,7 +18,9 @@ For grouped values, which group a calculation means is read from its
 description ("2025-05-02 일별 매출", "월요일 총매출", "M_30대 평균"). When the
 description names exactly one group, the value is checked against that group.
 When it names none, the value only has to equal some group's value; those
-looser checks are counted in `recompute_lenient`.
+looser checks are counted in `recompute_lenient`. If no group's value matches
+either, the formula may mean something else ("weekdays" is not "per weekday"),
+so it counts as `recompute_unverified`, never as wrong.
 """
 import re
 from pathlib import Path
@@ -28,7 +30,7 @@ from .citations import load_calculations
 AGGS = {
     "SUM": lambda s: s.sum(), "AVG": lambda s: s.mean(), "MEAN": lambda s: s.mean(),
     "MEDIAN": lambda s: s.median(), "MIN": lambda s: s.min(), "MAX": lambda s: s.max(),
-    "COUNT": lambda s: s.count(),
+    "COUNT": lambda s: s.count(), "STD": lambda s: s.std(), "STDDEV": lambda s: s.std(),
 }
 WEEKDAY_KEYS = {"weekday", "dayofweek", "day_of_week", "요일", "dow"}
 WEEKDAY_LABELS = [("월요일", "monday", "mon"), ("화요일", "tuesday", "tue"), ("수요일", "wednesday", "wed"),
@@ -120,10 +122,17 @@ def _grouped(df, keys, inner, description, outer=None, share=False):
         if v is None:
             return None
         values[gkey] = v / total * 100 if share else v
-    if outer:
-        return {"value": outer(list(values.values())), "lenient": False}
     text = (description or "").lower()
     names = [s.name for s in series]
+    if outer:
+        # "50대 최선호 카테고리 매출" = max within 50대 (and, if named, that category): narrow to
+        # groups whose key values the description names before taking the max / min.
+        pool = values
+        for j, n in enumerate(names):
+            named_vals = {g[j] for g in pool if any(_mentions(text, lbl) for lbl in _labels(n, g[j]))}
+            if named_vals and len(named_vals) < len({g[j] for g in pool}):
+                pool = {g: v for g, v in pool.items() if g[j] in named_vals}
+        return {"value": outer(list(pool.values())), "lenient": False}
     named = [g for g in values if all(any(_mentions(text, lbl) for lbl in _labels(n, part)) for n, part in zip(names, g))]
     if len(named) == 1:
         return {"value": values[named[0]], "lenient": False}
@@ -131,8 +140,198 @@ def _grouped(df, keys, inner, description, outer=None, share=False):
     return {"candidates": [values[g] for g in candidates], "lenient": True}
 
 
+# --- general expression evaluator ----------------------------------------------------
+#
+# Arithmetic over aggregates, each optionally filtered or grouped:
+#     SUM(Amount WHERE Category=='간편식') / SUM(Amount) * 100
+#     SUM(Amount|category)/SUM(Amount)*100          SUM(Amount|cat) / SUM(Amount|all)
+#     SUM(Amount) WHERE promotion-ids IS NULL        COUNT(rows WHERE Category==cat)
+#     MEAN(Amount) GROUP BY Category                 STD(Amount)/MEAN(Amount)*100
+# An unquoted value that isn't in the column (cat, X, d, '{}') is a placeholder:
+# the aggregate is computed per value and the description picks which one.
+# Names the agent derived itself (cat_sales, daily_sum, has_promo) aren't
+# columns, so such formulas stay unsupported.
+
+AGG_NAMES = "SUM|AVG|MEAN|MEDIAN|MIN|MAX|COUNT|STD|STDDEV|TOTAL"
+CLAUSE_RE = re.compile(r"\s+(GROUP(?:ED)?\s+BY|WHERE)\s+", re.I)
+
+
+def _top_level_split(f, rx):
+    """Split at the first match of rx that is outside parentheses."""
+    depth = 0
+    for i, ch in enumerate(f):
+        depth += ch == "("
+        depth -= ch == ")"
+        if depth == 0:
+            m = rx.match(f, i)
+            if m:
+                return f[:i], m.group(1).upper(), f[m.end():]
+    return f, None, None
+
+
+def _key_column(df, name):
+    """Column for a key name: exact (normalized), weekday, or a unique prefix (cat → Category)."""
+    if _norm(name) in WEEKDAY_KEYS:
+        return "weekday"
+    col = _column(df, name)
+    if col:
+        return col
+    hits = [c for c in df.columns if _norm(c).startswith(_norm(name))] if len(_norm(name)) >= 3 else []
+    return hits[0] if len(hits) == 1 else None
+
+
+def _conditions(df, text):
+    """[(col, op, literal)] filters and [col] placeholder keys, or None if unparseable."""
+    filters, keys = [], []
+    for part in re.split(r"\s+AND\s+", text.strip(), flags=re.I):
+        part = part.strip()
+        m = re.fullmatch(r"(.+?)\s+(IS\s+NOT\s+NULL|NOT\s+NULL|IS\s+NULL)", part, re.I)
+        if m:
+            col = _column(df, m.group(1))
+            if col is None:
+                return None
+            filters.append((col, "null" if m.group(2).upper() == "IS NULL" else "notnull", None))
+            continue
+        m = re.fullmatch(r"(.+?)\s*(==|!=|=)\s*(.+)", part)
+        if not m:
+            return None
+        col = _column(df, m.group(1))
+        if col is None:
+            return None
+        raw = m.group(3).strip()
+        quoted = re.fullmatch(r"(['\"])(.*)\1", raw)
+        val = quoted.group(2) if quoted else raw
+        values = set(df[col].astype(str))
+        if val in values:
+            filters.append((col, "!=" if m.group(2) == "!=" else "==", val))
+        elif (quoted and val in ("{}", "")) or (not quoted and re.fullmatch(r"[A-Za-z_]\w{0,11}", val)):
+            if m.group(2) == "!=":
+                return None
+            keys.append(col)
+        else:
+            return None
+    return filters, keys
+
+
+def _apply(df, filters):
+    for col, op, val in filters:
+        s = df[col]
+        if op == "null":
+            df = df[s.isna()]
+        elif op == "notnull":
+            df = df[s.notna()]
+        elif op == "==":
+            df = df[s.astype(str) == val]
+        else:
+            df = df[s.astype(str) != val]
+    return df
+
+
+def _parse_aggregate(df, func, inner):
+    inner = inner.strip()
+    agg = {"func": "SUM" if func == "TOTAL" else func, "total": func == "TOTAL", "filters": [], "keys": [], "distinct": False}
+    m = re.fullmatch(r"(.+?)\s+WHERE\s+(.+)", inner, re.I)
+    if m:
+        c = _conditions(df, m.group(2))
+        if c is None:
+            return None
+        agg["filters"], agg["keys"] = c
+        inner = m.group(1).strip()
+    if "|" in inner:
+        inner, key = (x.strip() for x in inner.split("|", 1))
+        if _norm(key) in ("all", "total", "전체"):
+            agg["total"] = True
+        else:
+            col = _key_column(df, key)
+            if col is None:
+                return None
+            agg["keys"].append(col)
+    m = re.fullmatch(r"DISTINCT\s+(.+)", inner, re.I)
+    if m:
+        agg["distinct"], inner = True, m.group(1)
+    agg["col"] = inner
+    if not (agg["func"] == "COUNT" and (inner in ("*", "") or _norm(inner) in ("rows", "row", "1", "orders", "transactions"))):
+        if _column(df, inner) is None:
+            return None
+    return agg
+
+
+def _recompute_expr(formula, df, description):
+    f = re.sub(r"\s+", " ", (formula or "").strip())
+    if re.match(r"(MAX|MIN)\(.*GROUP", f, re.I):
+        return None  # min / max over groups: handled by the fixed patterns
+    body, kind, rest = _top_level_split(f, CLAUSE_RE)
+    clause_keys, global_filters, global_keys = [], [], []
+    while kind:
+        nxt_body, nxt_kind, nxt_rest = _top_level_split(rest, CLAUSE_RE)
+        text = nxt_body
+        tail = re.search(r"\s*\*\s*100\s*$", text)
+        if tail:  # "... grouped by Category *100"
+            text, body = text[:tail.start()], body + " * 100"
+        if kind == "WHERE":
+            c = _conditions(df, text)
+            if c is None:
+                return None
+            global_filters += c[0]
+            global_keys += c[1]
+        else:
+            for k in _keys(text):
+                col = _key_column(df, k)
+                if col is None:
+                    return None
+                clause_keys.append(col)
+        kind, rest = nxt_kind, nxt_rest
+
+    aggs, out, i = [], [], 0
+    for m in re.finditer(rf"\b({AGG_NAMES})\(", body, re.I):
+        if m.start() < i:
+            return None
+        close = body.find(")", m.end())
+        if close < 0 or "(" in body[m.end():close]:
+            return None  # nested aggregates aren't supported
+        a = _parse_aggregate(df, m.group(1).upper(), body[m.end():close])
+        if a is None:
+            return None
+        out.append(body[i:m.start()] + f" a{len(aggs)} ")
+        aggs.append(a)
+        i = close + 1
+    out.append(body[i:])
+    expr = "".join(out)
+    if not aggs or not re.fullmatch(r"[\sa0-9.+\-*/()]*", expr) or re.search(r"[a-z]", re.sub(r"\ba\d+\b", "", expr)):
+        return None
+
+    keys = list(dict.fromkeys(clause_keys + global_keys + [k for a in aggs for k in a["keys"]]))
+    base = _apply(df, global_filters)
+
+    def evaluate(part):
+        env = {}
+        for n, a in enumerate(aggs):
+            grouped = bool(clause_keys or global_keys or a["keys"])
+            src = df if a["total"] else (part if grouped else base)
+            v = _agg(_apply(src, a["filters"]), a["func"], a["distinct"], a["col"])
+            if v is None:
+                return None
+            env[f"a{n}"] = v
+        try:
+            return float(eval(expr, {"__builtins__": {}}, env))  # expr is digits, operators and a<n> only
+        except ZeroDivisionError:
+            return None
+
+    if not keys:
+        v = evaluate(base)
+        return None if v is None else {"value": v, "lenient": False}
+    series = [_key_series(base, k) if k == "weekday" else base[k] for k in keys]
+    return _grouped(base, keys, evaluate, description) if all(s is not None for s in series) else None
+
+
 def recompute(formula, df, description=""):
     """Recomputed value as {"value": x} or {"candidates": [...], "lenient": True}; None if unsupported."""
+    try:
+        r = _recompute_expr(formula, df, description)
+    except Exception:
+        r = None
+    if r is not None:
+        return r
     f = re.sub(r"\s+", " ", (formula or "").strip())
     scale = 1.0
     m = re.fullmatch(r"(.*?)\s*\*\s*100", f)
@@ -230,7 +429,7 @@ def grade(artifacts_dir, csv_path):
     df = load_csv(csv_path)
     source_name = Path(csv_path).name
     details = []
-    supported = ok = lenient = 0
+    supported = ok = lenient = unverified = 0
     for cid, c in calcs.items():
         # Only calculations made directly on the raw file; derived artifacts
         # (.pkl, intermediate CSVs) have columns we cannot reproduce.
@@ -248,22 +447,25 @@ def grade(artifacts_dir, csv_path):
             supported += 1
             details.append(f"{cid}: non-numeric value {c.get('value')!r}")
             continue
-        supported += 1
-        lenient += r.get("lenient", False)
         if "value" in r:
-            hit = same_value(stored, r["value"])
-            want = r["value"]
-        else:
-            hit = any(same_value(stored, v) for v in r["candidates"])
-            want = f"one of {len(r['candidates'])} group values"
-        if hit:
+            supported += 1
+            if same_value(stored, r["value"]):
+                ok += 1
+            else:
+                details.append(f"{cid}: {c.get('formula')} [{c.get('description', '')[:40]}] stored {stored} but recomputed {r['value']}")
+        elif any(same_value(stored, v) for v in r["candidates"]):
+            supported += 1
             ok += 1
+            lenient += 1
         else:
-            details.append(f"{cid}: {c.get('formula')} [{c.get('description', '')[:40]}] stored {stored} but recomputed {want}")
+            # The description didn't say which group, and no group matches: the formula may mean
+            # something else ("weekdays" vs per weekday), so this is unverified, not wrong.
+            unverified += 1
     return {
         "recompute_supported": supported,
         "recompute_total": len(calcs),
         "recompute_lenient": lenient,
+        "recompute_unverified": unverified,
         "recompute_match_rate": ok / supported if supported else None,
         "details": details,
     }
