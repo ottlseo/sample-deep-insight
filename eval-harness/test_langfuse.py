@@ -264,3 +264,17 @@ def test_dry_run_needs_no_credentials(tag_dir, monkeypatch, capsys):
     monkeypatch.setattr("sys.argv", ["langfuse_sync.py", str(tag), "--dry-run"])
     assert ls.main() == 0
     assert "1 runs" in capsys.readouterr().out
+
+
+def test_cloud_host_refused_unless_allowed(monkeypatch):
+    for host in ("https://cloud.langfuse.com", "https://us.cloud.langfuse.com", "eu.cloud.langfuse.com"):
+        assert ls.is_cloud_host(host)
+    for host in ("https://langfuse.internal.example.com", "http://localhost:3000", "https://notcloud.langfuse.com.evil"):
+        assert not ls.is_cloud_host(host)
+    monkeypatch.setattr(ls, "dotenv_values", lambda p: {})
+    monkeypatch.setenv("LANGFUSE_HOST", "https://us.cloud.langfuse.com")
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk")
+    with pytest.raises(SystemExit, match="Langfuse Cloud"):
+        ls.credentials()
+    assert ls.credentials(allow_cloud=True)[0] == "https://us.cloud.langfuse.com"

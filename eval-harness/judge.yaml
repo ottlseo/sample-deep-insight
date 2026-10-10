@@ -6,8 +6,13 @@
 #   global.openai.gpt-6-astra    $10 / $50 per 1M tokens (verified, Pricing API)
 #   global.openai.gpt-6.1-sol    price not in the Pricing API yet
 #   global.openai.gpt-6-sol      price not in the Pricing API yet
+# In another region, check what your account can call first:
+#   aws bedrock list-inference-profiles --region <region> | grep openai
+# The harness checks the model below before the first call and stops if it
+# isn't available there.
 model: global.openai.gpt-6-astra
-region: us-west-2
+# null = JUDGE_REGION, then EVAL_REGION (eval.env), then AWS_REGION / your AWS default region.
+region: null
 # Sent as outputConfig.effort. Set to null if the model rejects it.
 effort: high
 max_tokens: 32000

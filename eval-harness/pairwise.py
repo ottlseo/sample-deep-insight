@@ -107,6 +107,7 @@ def main():
     args = ap.parse_args()
 
     cfg = judge.load_config()
+    judge.check_available(cfg)
     client = judge.make_client(cfg)
     rng = random.Random(args.seed)
     base_dir, cand_dir = Path(args.baseline).resolve(), Path(args.candidate).resolve()

@@ -109,7 +109,38 @@ class PairwiseVerdict(BaseModel):
 # --- config and client --------------------------------------------------------
 
 def load_config(path=HERE / "judge.yaml"):
-    return yaml.safe_load(Path(path).read_text(encoding="utf-8"))
+    """judge.yaml, with `region: null` resolved from JUDGE_REGION, eval.env's EVAL_REGION or the AWS default."""
+    import os
+    cfg = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
+    if not cfg.get("region"):
+        from dotenv import dotenv_values
+        env = {**dotenv_values(HERE / "eval.env"), **os.environ}
+        region = env.get("JUDGE_REGION") or env.get("EVAL_REGION") or env.get("AWS_REGION") or env.get("AWS_DEFAULT_REGION")
+        if not region:
+            import boto3
+            region = boto3.session.Session().region_name
+        if not region:
+            raise SystemExit("judge.yaml has no region and none is configured (JUDGE_REGION, EVAL_REGION or AWS_REGION)")
+        cfg["region"] = region
+    return cfg
+
+
+def check_available(cfg, bedrock=None):
+    """Fail fast when the judge model can't be called in this region (no model call, no cost)."""
+    import boto3
+    bedrock = bedrock or boto3.client("bedrock", region_name=cfg["region"])
+    model = cfg["model"]
+    try:
+        if model.split(".", 1)[0] in ("global", "us", "eu", "apac", "jp", "au", "ca", "us-gov"):
+            status = bedrock.get_inference_profile(inferenceProfileIdentifier=model).get("status")
+        else:
+            status = bedrock.get_foundation_model(modelIdentifier=model)["modelDetails"].get("modelLifecycle", {}).get("status")
+    except Exception as e:
+        raise SystemExit(f"judge model {model} isn't available in {cfg['region']} ({type(e).__name__}). Pick another in judge.yaml; "
+                         f"see `aws bedrock list-inference-profiles --region {cfg['region']}` "
+                         "(a model outside the Claude family, so the judge isn't grading its own family's writing).")
+    if status not in ("ACTIVE", None):
+        raise SystemExit(f"judge model {model} is {status} in {cfg['region']}; pick another in judge.yaml")
 
 
 def make_client(cfg):

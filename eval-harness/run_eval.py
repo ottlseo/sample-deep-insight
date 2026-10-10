@@ -38,7 +38,7 @@ HERE = Path(__file__).resolve().parent
 REPO = HERE.parent
 sys.path.insert(0, str(HERE))
 
-from grade import grade_run, load_scenario, model_ctx  # noqa: E402
+from grade import announce, grade_run, load_scenario, model_ctx  # noqa: E402
 
 SESSIONS_PREFIX = "deep-insight/fargate_sessions/"
 
@@ -236,6 +236,7 @@ def main():
     args = ap.parse_args()
     args.judge_ctx = model_ctx() if args.judge else None
     args.factcheck_ctx = None if args.no_factcheck else (args.judge_ctx or model_ctx())
+    announce(args.factcheck_ctx, args.judge_ctx)
     if not args.runtime_arn:
         ap.error("--runtime-arn is required (or run `eval_runtime.py create`, which writes eval.env)")
     if args.runtime_arn == env.get("RUNTIME_ARN") and not args.allow_users_runtime:

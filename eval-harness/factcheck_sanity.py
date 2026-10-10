@@ -116,6 +116,7 @@ def main():
     args = ap.parse_args()
 
     cfg = judge.load_config()
+    judge.check_available(cfg)
     client = judge.make_client(cfg)
     files = [Path(g) for g in args.gold] or sorted(CASES.glob("*.yaml"))
     outcomes = defaultdict(list)  # (file, case, label index) -> [held, ...]

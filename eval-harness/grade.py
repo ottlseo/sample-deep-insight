@@ -202,7 +202,18 @@ def model_ctx():
     """(Bedrock client, judge.yaml settings), shared by the judge and the fact check."""
     import judge
     cfg = judge.load_config()
+    judge.check_available(cfg)
     return judge.make_client(cfg), cfg
+
+
+def announce(factcheck_ctx, judge_ctx):
+    """Say up front which paid model calls a run will make."""
+    cfg = (factcheck_ctx or judge_ctx or (None, None))[1]
+    if not cfg:
+        return
+    on = [name for name, ctx in (("fact check ~$1/report", factcheck_ctx), ("LLM judge ~$0.1-0.3/report", judge_ctx)) if ctx]
+    print(f"paid checks: {', '.join(on)} · {cfg['model']} in {cfg['region']}"
+          + ("" if not factcheck_ctx else " · --no-factcheck to skip the fact check"), file=sys.stderr)
 
 
 def main():
@@ -227,6 +238,7 @@ def main():
     if key_path and not args.no_factcheck:
         factcheck_ctx = judge_ctx or model_ctx()
 
+    announce(factcheck_ctx, judge_ctx)
     result = grade_run(args.run_dir, csv_path, key_path, scenario, judge_ctx, factcheck_ctx)
     out = Path(args.run_dir) / "scores.json"
     out.write_text(json.dumps(result, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")

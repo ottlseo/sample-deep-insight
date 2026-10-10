@@ -46,6 +46,12 @@ Each run costs real money (about $4–5 for `moon_market_kr_simple`, more for
 the full query) and takes 15–40 minutes, so start with
 `moon_market_kr_simple` when you only need a smoke test.
 
+On top of that, grading makes paid model calls: **the fact check runs by
+default** whenever the scenario has an answer key (about $1 per report;
+`--no-factcheck` skips it), and the LLM judge runs with `--judge` (about
+$0.1–0.3 per report). The runner prints which paid checks are on, with the
+model and region, before the first run.
+
 ## Fact check: report numbers against the answer key
 
 The answer key (`answer_keys/`) holds facts computed from the dataset with
@@ -119,7 +125,23 @@ The graders above check that numbers are right. They can't see whether the
 report answers the request: a report that only states total revenue correctly
 passes all of them. The judge closes that gap. It runs on an **OpenAI model in
 Amazon Bedrock** (Converse API, `judge.yaml`), a different family from the
-Claude agents, so it isn't grading its own family's writing.
+Claude agents, so it isn't grading its own family's writing. The fact check
+uses the same model.
+
+**Region and model.** `judge.yaml` → `region: null` uses `JUDGE_REGION`, then
+`EVAL_REGION` (`eval.env`), then your AWS default region. Before the first
+call, the harness checks that the model can be called there (a free Bedrock
+control-plane call) and stops with a message if not. The default,
+`global.openai.gpt-6-astra`, is what we tested in us-west-2; in another region
+check what your account has and set `model:` to it:
+
+```bash
+aws bedrock list-inference-profiles --region <region> --query "inferenceProfileSummaries[?contains(inferenceProfileId, 'openai')].[inferenceProfileId,status]"
+```
+
+A different model changes `judge_version`, so old verdicts are re-judged, not
+reused; run `judge_sanity.py` and `factcheck_sanity.py` on it before trusting
+its scores.
 
 **Pointwise** (`grade.py --judge`, `run_eval.py --judge`) reads the request,
 the scenario's `requirements` (`scenarios.yaml`) and the report, and returns:
@@ -169,8 +191,18 @@ verdict that flips with the order counts as a tie. Results show in
 
 ## Langfuse: browse, compare and label in a UI
 
-`langfuse_sync.py` publishes results to a Langfuse project (self-hosted works;
-uses the public REST API):
+`langfuse_sync.py` publishes results to a Langfuse project through the public
+REST API. **What it sends:** the request, the full report text, judge
+justifications and per-agent usage. Run Langfuse in your own AWS account so
+none of this leaves it: [deploy-langfuse-on-ecs-with-fargate](https://github.com/aws-samples/deploy-langfuse-on-ecs-with-fargate)
+deploys a self-hosted Langfuse on ECS Fargate. A Langfuse Cloud host
+(`*.cloud.langfuse.com`) is refused unless you pass `--allow-cloud`.
+
+Give the harness **a Langfuse project of its own**. A re-sync deletes what the
+tool created earlier for the same runs: superseded traces (unless they have
+human labels) and the dataset run of each synced tag in `deep-insight-eval`,
+which is rebuilt. In a shared project, a dataset or run with the same name
+would be replaced.
 
 | Eval harness | Langfuse |
 |---|---|

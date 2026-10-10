@@ -189,3 +189,31 @@ def test_pairwise_cache_is_keyed_by_judge_version(tmp_path, scenario):
     changed = {**scenario, "requirements": scenario["requirements"][:1]}
     pairwise.judge_pair(client, CFG, changed, cand, base, random.Random(0))
     assert len(client.requests) == 4                                    # requirements changed → judged again
+
+
+def test_region_null_falls_back_to_env(tmp_path, monkeypatch):
+    path = tmp_path / "judge.yaml"
+    path.write_text("model: global.openai.gpt-6-astra\nregion: null\n")
+    monkeypatch.setattr(judge, "HERE", tmp_path)   # no eval.env here
+    monkeypatch.delenv("JUDGE_REGION", raising=False)
+    monkeypatch.setenv("AWS_REGION", "eu-west-1")
+    assert judge.load_config(path)["region"] == "eu-west-1"
+    monkeypatch.setenv("JUDGE_REGION", "ap-northeast-2")
+    assert judge.load_config(path)["region"] == "ap-northeast-2"
+
+
+class FakeBedrockControl:
+    def __init__(self, profiles):
+        self.profiles = profiles
+
+    def get_inference_profile(self, inferenceProfileIdentifier):
+        if inferenceProfileIdentifier not in self.profiles:
+            raise RuntimeError("ResourceNotFoundException")
+        return {"status": self.profiles[inferenceProfileIdentifier]}
+
+
+def test_check_available_stops_before_any_model_call():
+    cfg = {"model": "global.openai.gpt-6-astra", "region": "eu-west-1"}
+    judge.check_available(cfg, FakeBedrockControl({"global.openai.gpt-6-astra": "ACTIVE"}))
+    with pytest.raises(SystemExit, match="isn't available in eu-west-1"):
+        judge.check_available(cfg, FakeBedrockControl({}))

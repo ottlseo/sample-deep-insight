@@ -121,6 +121,7 @@ def main():
     args = ap.parse_args()
 
     cfg = judge.load_config()
+    judge.check_available(cfg)
     client = judge.make_client(cfg)
     scenario = load_scenario(args.scenario)
     full = judge.report_text(artifacts_dir(args.run_dir), cfg["max_report_chars"])

@@ -26,6 +26,12 @@ a hash of the run's content: syncing unchanged results is a no-op, and changed
 results get a new trace while the old one is deleted (kept, with a warning, if
 people already labeled it). Credentials: LANGFUSE_HOST, LANGFUSE_PUBLIC_KEY,
 LANGFUSE_SECRET_KEY from the environment or eval-harness/langfuse.env.
+
+The full report text and the request go to LANGFUSE_HOST. Use a self-hosted
+Langfuse in your own AWS account (e.g.
+https://github.com/aws-samples/deploy-langfuse-on-ecs-with-fargate); Langfuse
+Cloud hosts are refused unless --allow-cloud. Use a project of its own: a
+re-sync deletes traces and dataset runs this tool created earlier.
 """
 import argparse
 import hashlib
@@ -376,12 +382,22 @@ def queue_traces(lf, trace_ids, configs):
     return queue, added
 
 
-def credentials():
+def is_cloud_host(host):
+    from urllib.parse import urlparse
+    name = (urlparse(host if "://" in host else f"https://{host}").hostname or "").lower()
+    return name == "cloud.langfuse.com" or name.endswith(".cloud.langfuse.com")
+
+
+def credentials(allow_cloud=False):
     env = {**dotenv_values(HERE / "langfuse.env"), **os.environ}
     keys = ("LANGFUSE_HOST", "LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY")
     missing = [k for k in keys if not env.get(k)]
     if missing:
         raise SystemExit(f"missing {', '.join(missing)} (set them in the environment or eval-harness/langfuse.env)")
+    if is_cloud_host(env["LANGFUSE_HOST"]) and not allow_cloud:
+        raise SystemExit(f"{env['LANGFUSE_HOST']} is Langfuse Cloud: report texts would leave your AWS account. "
+                         "Self-host Langfuse (https://github.com/aws-samples/deploy-langfuse-on-ecs-with-fargate) "
+                         "or pass --allow-cloud if that is intended.")
     return [env[k] for k in keys]
 
 
@@ -390,6 +406,7 @@ def main():
     ap.add_argument("tags", nargs="+", help="tag folders under eval_results/")
     ap.add_argument("--queue", action="store_true", help=f"add the traces to the annotation queue {QUEUE}")
     ap.add_argument("--dry-run", action="store_true", help="build the events and print counts; send nothing")
+    ap.add_argument("--allow-cloud", action="store_true", help="allow a Langfuse Cloud host (report texts leave your account)")
     args = ap.parse_args()
 
     scenarios_all = yaml.safe_load(SCENARIOS_FILE.read_text(encoding="utf-8"))["scenarios"]
@@ -403,7 +420,7 @@ def main():
             print(f"{Path(tag).name}: {len(runs)} runs → {n} events")
         return 0
 
-    lf = Langfuse(*credentials())
+    lf = Langfuse(*credentials(args.allow_cloud))
     configs = ensure_score_configs(lf, req_ids)
     tag_runs = {Path(t).name: sorted(p.parent for p in Path(t).glob("*/scores.json") if (p.parent / "run.json").is_file())
                 for t in args.tags}
