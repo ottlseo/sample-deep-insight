@@ -215,13 +215,17 @@ def run_once(args, scenario_name, scenario, run_dir, clients):
 
 
 def main():
-    env = {**dotenv_values(REPO / "managed-agentcore" / ".env"), **os.environ}
+    # eval.env (written by eval_runtime.py create) points at the eval runtime;
+    # managed-agentcore/.env only has the users' runtime.
+    env = {**dotenv_values(REPO / "managed-agentcore" / ".env"), **dotenv_values(HERE / "eval.env"), **os.environ}
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--scenario", required=True, action="append", help="repeatable")
     ap.add_argument("--repeat", type=int, default=1)
     ap.add_argument("--tag", required=True, help="results go to eval_results/<tag>/")
     ap.add_argument("--runtime-arn", default=env.get("EVAL_RUNTIME_ARN") or env.get("RUNTIME_ARN"))
-    ap.add_argument("--region", default=env.get("AWS_REGION") or "us-west-2")
+    ap.add_argument("--region", default=env.get("EVAL_REGION") or env.get("AWS_REGION") or "us-west-2")
+    ap.add_argument("--allow-users-runtime", action="store_true",
+                    help="run against the runtime the web app uses (model or image changes there reach users)")
     ap.add_argument("--bucket", default=env.get("S3_BUCKET_NAME"), help="defaults to the runtime's S3_BUCKET_NAME")
     ap.add_argument("--timeout", type=int, default=3600, help="seconds per run")
     ap.add_argument("--allow-holdout", action="store_true")
@@ -233,7 +237,10 @@ def main():
     args.judge_ctx = model_ctx() if args.judge else None
     args.factcheck_ctx = None if args.no_factcheck else (args.judge_ctx or model_ctx())
     if not args.runtime_arn:
-        ap.error("--runtime-arn (or RUNTIME_ARN in managed-agentcore/.env) is required")
+        ap.error("--runtime-arn is required (or run `eval_runtime.py create`, which writes eval.env)")
+    if args.runtime_arn == env.get("RUNTIME_ARN") and not args.allow_users_runtime:
+        ap.error("this is the users' runtime (managed-agentcore/.env RUNTIME_ARN); evals belong on the eval runtime "
+                 "(`eval_runtime.py create`). Pass --allow-users-runtime to run here anyway.")
 
     cfg = {**git_info(), "runtime_arn": args.runtime_arn, "region": args.region, **runtime_config(args.region, args.runtime_arn)}
     if not args.bucket:

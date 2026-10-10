@@ -56,3 +56,5 @@ eval-harness/eval_results/
 
 # Langfuse credentials for eval-harness/langfuse_sync.py
 eval-harness/langfuse.env
+# Eval runtime ARN written by eval-harness/eval_runtime.py
+eval-harness/eval.env

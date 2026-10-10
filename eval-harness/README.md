@@ -266,11 +266,61 @@ key. The key now has 48 facts (regions, weeks, cross segments, promotion
 codes) and the fact check reads them differently, so `min_other_facts: 4` is
 a floor until the baseline runs are re-graded and it is set again from them.
 
-## Runs against the deployed runtime
+## The eval runtime: don't run evals on the users' runtime
+
+The web app runs on the AgentCore runtime `deep_insight_runtime_vpc`. Evals
+run on a separate one, `deep_insight_eval_runtime`, so that switching models
+or trying an image for an experiment never changes what users get, and eval
+load never sits in the users' runtime.
+
+| | Users' runtime | Eval runtime |
+|---|---|---|
+| Who calls it | the web app (and `02_invoke_agentcore_runtime_vpc.py`) | `run_eval.py` only |
+| Models | `managed-agentcore/.env`, set at deploy | `eval_runtime.py set-models <preset>` (`runtime_configs.yaml`) |
+| Image | `…deep_insight_runtime_vpc:latest`, moves with every deploy | pinned by digest; changes only with `set-image` |
+| Shared | role, VPC, ECS cluster, ALB, Fargate task definition, S3 bucket | same |
+
+Sessions can't cross between the two: every request to a Fargate container
+carries its session id, and the code executor rejects a mismatch with 403 (the
+fix for the 2026-02-22 cross-runtime incident in `docs/incidents/`). What is
+still shared is capacity (Fargate tasks, ALB, Bedrock quotas), so keep long
+eval batches away from busy hours.
+
+**Set it up once** (needs the users' runtime deployed, `managed-agentcore/` phases 1-3):
 
 ```bash
-.venv/bin/python run_eval.py --scenario moon_market_kr --repeat 3 --tag baseline \
-    --runtime-arn arn:aws:bedrock-agentcore:<region>:<account>:runtime/<id> --region us-west-2
+.venv/bin/python eval_runtime.py create    # copies the users' runtime; ARN → eval.env (git-ignored)
+.venv/bin/python eval_runtime.py status    # both runtimes: version, image, models
+```
+
+**Day to day**
+
+```bash
+# measure what users have now
+.venv/bin/python eval_runtime.py set-image          # follow the users' current image
+.venv/bin/python eval_runtime.py set-models users
+.venv/bin/python run_eval.py --scenario moon_market_kr --repeat 5 --tag baseline-<date> --judge
+
+# try a model config without touching users
+.venv/bin/python eval_runtime.py set-models sonnet45-workers
+.venv/bin/python run_eval.py --scenario moon_market_kr --repeat 5 --tag sonnet45 --judge
+.venv/bin/python eval_runtime.py set-models users
+
+# try a candidate image before it reaches users: build and push it with its own tag, then
+.venv/bin/python eval_runtime.py set-image <account>.dkr.ecr.<region>.amazonaws.com/<repo>:<candidate-tag>
+```
+
+`run_eval.py` uses `EVAL_RUNTIME_ARN` from `eval.env` and refuses the users'
+runtime (`RUNTIME_ARN` in `managed-agentcore/.env`) unless given
+`--allow-users-runtime`. Runtimes created after 2026-06-11 can't set
+`requireServiceS3Endpoint`, so the eval runtime keeps AgentCore's default
+there while the users' runtime has it on; S3 access goes through the same VPC
+either way. `eval_runtime.py delete` removes it.
+
+## Runs on the eval runtime
+
+```bash
+.venv/bin/python run_eval.py --scenario moon_market_kr --repeat 3 --tag baseline
 ```
 
 Each run is saved to `eval_results/<tag>/<scenario>-<timestamp>-<n>/`:

@@ -126,6 +126,7 @@ The eval harness turns "did this change make Deep Insight better?" into numbers.
 
 ```bash
 cd eval-harness   # setup: see the Eval Harness README
+.venv/bin/python eval_runtime.py create                                            # once: a separate runtime for evals, so users aren't affected
 .venv/bin/python run_eval.py --scenario moon_market_kr --repeat 3 --tag baseline   # run + grade
 .venv/bin/python compare.py eval_results/baseline eval_results/my-change           # before vs after
 .venv/bin/python -m pytest -q                                                      # static checks, no AWS
