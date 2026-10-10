@@ -608,9 +608,12 @@ var TraceView = (function() {
         header.appendChild(stats);
         pane.appendChild(header);
 
+        // Metadata sits under the node's own input/output, always starting closed
+        var meta = function() { return section(t('tv_metadata'), false, jsonTree(metadata(v, ctx.job))); };
         if (v.kind === 'trace') {
             pane.appendChild(section(t('tv_input'), true, textBlock(node.input || (ctx.job && ctx.job.user_query))));
             pane.appendChild(section(t('tv_output'), true, textBlock(node.output)));
+            pane.appendChild(meta());
             var reviews = [];
             walk(node, function(n) { if (n.type === 'hitl') reviews.push(n); });
             if (reviews.length) {
@@ -631,8 +634,10 @@ var TraceView = (function() {
             pane.appendChild(section(t('tv_input'), !node.implicit, node.implicit
                 ? el('div', 'tv-empty', t('tv_input_not_recorded')) : textBlock(node.input)));
             pane.appendChild(section(t('tv_output'), true, textBlock(node.output)));
+            pane.appendChild(meta());
             pane.appendChild(processSection(node.items, ctx, v));
         } else if (v.kind === 'turn') {
+            pane.appendChild(meta());
             pane.appendChild(processSection(v.items, ctx, v));
         } else if (v.kind === 'hitl') {
             pane.appendChild(section(t('trace_plan'), true, textBlock(node.plan)));
@@ -641,8 +646,8 @@ var TraceView = (function() {
             answer.appendChild(textBlock(node.feedback || (node.decision ? t('hitl_no_feedback') : t('trace_running')),
                 node.feedback ? 'tv-text tv-feedback' : 'tv-empty'));
             pane.appendChild(section(t('hitl_feedback'), true, answer));
+            pane.appendChild(meta());
         }
-        pane.appendChild(section(t('tv_metadata'), false, jsonTree(metadata(v, ctx.job))));
     }
 
     // ---------- View ----------
