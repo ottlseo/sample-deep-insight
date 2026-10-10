@@ -626,10 +626,12 @@ var TraceView = (function() {
                 pane.appendChild(section(t('hitl_title'), true, list));
             }
         } else if (v.kind === 'agent') {
+            // The agent's own input and output first; the process below has
+            // per-tool-call inputs and outputs of its own
             pane.appendChild(section(t('tv_input'), !node.implicit, node.implicit
                 ? el('div', 'tv-empty', t('tv_input_not_recorded')) : textBlock(node.input)));
-            pane.appendChild(processSection(node.items, ctx, v));
             pane.appendChild(section(t('tv_output'), true, textBlock(node.output)));
+            pane.appendChild(processSection(node.items, ctx, v));
         } else if (v.kind === 'turn') {
             pane.appendChild(processSection(v.items, ctx, v));
         } else if (v.kind === 'hitl') {
