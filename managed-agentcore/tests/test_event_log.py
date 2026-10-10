@@ -153,3 +153,20 @@ def test_agent_start_end_and_last_text(log):
     assert [r["kind"] for r in records] == ["agent_start", "text", "agent_end", "text"]
     assert records[0]["input"] == "Load the data" and records[2]["error"] is None
     assert log.last_text == "Done: 836 rows"
+
+
+def test_heartbeat_uploads_an_unchanged_log(log, monkeypatch):
+    # the trace's last-modified time is the job's heartbeat for the stale-job sweep
+    from src.utils import event_log as module
+    s3 = _S3()
+    up = module.TraceUploader(log, s3, "b", "k")
+    clock = [1000.0]
+    monkeypatch.setattr(module.time, "monotonic", lambda: clock[0])
+    log.add(_text("coder", "waiting"))
+    up.checkpoint()
+    clock[0] += 60
+    up.checkpoint()  # unchanged, heartbeat not due
+    clock[0] += module.HEARTBEAT_SECONDS
+    up.checkpoint()  # unchanged, heartbeat due
+    up.finish()
+    assert len(s3.puts) == 3

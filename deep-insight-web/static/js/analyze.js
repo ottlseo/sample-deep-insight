@@ -157,6 +157,10 @@ function initAnalyze() {
 // status instead of reporting the disconnect as a failed analysis.
 const JOB_POLL_MS = 15000;
 const JOB_POLL_MAX_MS = 3 * 60 * 60 * 1000;
+// Failed isn't always final: the stale-job sweep can mark a job that is only
+// slow, and its Success replaces that later. Keep checking for a while.
+const JOB_RECHECK_AFTER_FAILED_MS = 30 * 60 * 1000;
+const JOB_RECHECK_MS = 60000;
 let streamCompleted = false;
 let streamErrored = false;
 
@@ -164,6 +168,7 @@ async function followJobAfterDisconnect(uploadId) {
     const t = translations[currentLang];
     appendOutput("\n" + t.stream_lost + "\n", "event-text");
     const started = Date.now();
+    let failedAt = null;
     while (Date.now() - started < JOB_POLL_MAX_MS) {
         let data = null;
         try {
@@ -181,19 +186,22 @@ async function followJobAfterDisconnect(uploadId) {
         }
         if (data && data.status === "Success") {
             stopElapsedTimer();
-            appendOutput("\n[Analysis complete]\n", "event-done");
+            appendOutput("\n" + (failedAt ? t.stream_job_recovered : "[Analysis complete]") + "\n", "event-done");
             currentSessionId = data.session_id || null;
             if (currentSessionId) await fetchArtifactsWithRetry(currentSessionId);
             removeStreamingIndicator();
             return;
         }
         if (data && data.status === "Failed") {
-            stopElapsedTimer();
-            removeStreamingIndicator();
-            appendOutput("\n" + t.stream_job_failed + " (" + uploadId + ")\n", "event-error");
-            return;
+            if (!failedAt) {
+                failedAt = Date.now();
+                stopElapsedTimer();
+                removeStreamingIndicator();
+                appendOutput("\n" + t.stream_job_failed + " (" + uploadId + ")\n", "event-error");
+            }
+            if (Date.now() - failedAt >= JOB_RECHECK_AFTER_FAILED_MS) return;
         }
-        await new Promise(r => setTimeout(r, JOB_POLL_MS));
+        await new Promise(r => setTimeout(r, failedAt ? JOB_RECHECK_MS : JOB_POLL_MS));
     }
     stopElapsedTimer();
     removeStreamingIndicator();

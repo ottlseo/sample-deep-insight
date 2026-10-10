@@ -32,6 +32,7 @@ import json
 import logging
 import os
 import tempfile
+import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import Any, Dict, Optional
@@ -40,6 +41,10 @@ logger = logging.getLogger(__name__)
 
 MAX_FIELD_CHARS = 50_000
 CHECKPOINT_SECONDS = 30
+# Re-upload at least this often, changed or not: the trace's last-modified time
+# is the job's heartbeat for the ops stale-job sweep (agents can sit silent for
+# minutes: a HITL wait, a long code execution)
+HEARTBEAT_SECONDS = 300
 
 
 def _now() -> str:
@@ -246,17 +251,21 @@ class TraceUploader:
         self.key = key
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="trace-upload")
         self._uploaded_version = None
+        self._uploaded_at = 0.0
         self._finished = False
 
     def checkpoint(self) -> None:
-        """Queue an upload of the log as it is now, if it changed. Never raises."""
+        """Queue an upload of the log as it is now, if it changed or the
+        heartbeat is due. Never raises."""
         if self._finished:
             return
         try:
             version = self.event_log.version
-            if version == self._uploaded_version:
+            heartbeat_due = time.monotonic() - self._uploaded_at >= HEARTBEAT_SECONDS
+            if version == self._uploaded_version and not heartbeat_due:
                 return
             self._uploaded_version = version
+            self._uploaded_at = time.monotonic()
             self._executor.submit(self._put, self.event_log.snapshot())
         except Exception as e:
             logger.warning(f"Trace checkpoint skipped ({e})")

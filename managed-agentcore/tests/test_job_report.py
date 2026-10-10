@@ -155,3 +155,26 @@ def test_job_status_written_after_cleanup(s3, monkeypatch, error):
     keys = [key for key, _ in s3.history]
     assert keys.index("<cleanup>") < keys.index("deep-insight/fargate_sessions/sess-1/output/job_status.json")
     assert keys.count("<cleanup>") == 1
+
+
+@pytest.fixture
+def tokens(monkeypatch):
+    from src.graph import nodes
+    monkeypatch.setitem(nodes._global_node_states, "shared", {"token_usage": {
+        "total_tokens": 150, "total_input_tokens": 100, "total_output_tokens": 50,
+        "cache_read_input_tokens": 0, "cache_write_input_tokens": 0, "by_agent": {}}})
+
+
+def test_failed_run_writes_no_token_usage_file(s3, monkeypatch, tokens):
+    # Ops Lambdas that predate job_status.json read token_usage.json as "succeeded"
+    with pytest.raises(RuntimeError):
+        _run(monkeypatch, FakeGraph([TEXT], error=RuntimeError("boom")))
+    assert not any(k.endswith("token_usage.json") for k in s3.objects)
+    status = _status(s3)
+    assert status["status"] == "Failed" and status["token_usage"]["total_tokens"] == 150
+
+
+def test_successful_run_writes_token_usage_file(s3, monkeypatch, tokens):
+    _run(monkeypatch, FakeGraph([TEXT]))
+    assert "deep-insight/fargate_sessions/sess-1/output/token_usage.json" in s3.objects
+    assert _status(s3)["token_usage"] is None

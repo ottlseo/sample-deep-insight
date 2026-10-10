@@ -31,11 +31,12 @@ AgentCore Runtime
                                                      │ S3 event
                                                      ▼
                          Lambda: update job by job_id ──► Success / Failed + SNS
-EventBridge (15 min) ──► Lambda: Start for > STALE_JOB_MINUTES ──► Failed
+EventBridge (15 min) ──► Lambda: Start with no sign of life ──► Failed
 ```
 
 - **Trace**: the runtime records every agent event before the response stream's event filter, so tool calls (generated code, execution output) are included even though they are never streamed to the browser. It is keyed by `job_id`, which the dashboard knows from the start, and re-uploaded after each agent invocation: a running job shows the agents finished so far, and a runtime that dies mid-run still leaves the trace up to its last finished agent. Plan reviews (HITL) are recorded with the plan shown and the user's answer (approved / revision requested with feedback / auto-approved).
-- **Status**: the runtime reports the final status itself, so a job settles even if the browser connection drops mid-run. The schedule covers a runtime that stops without reporting (default 120 minutes, Lambda env `STALE_JOB_MINUTES`).
+- **Status**: the runtime reports the final status itself, so a job settles even if the browser connection drops mid-run. Three writers record status (runtime via the Lambda, the web server on stream errors, the stale-job sweep); **Success is final**: none of them replaces a Success with Failed.
+- **Stale jobs**: the runtime re-uploads the trace at least every 5 minutes while it runs, so the trace's last-modified time is a heartbeat. The sweep marks a job Failed when its trace hasn't changed for 30 minutes (Lambda env `STALE_HEARTBEAT_MINUTES`), or, for jobs without a trace (older runtimes), 120 minutes after it started (`STALE_JOB_MINUTES`). Long runs with several plan revisions and HITL waits keep their heartbeat and stay running.
 
 **References**:
 - [Planning Documents](../../docs/features/ops-dashboard/plan/) — business requirements, research, technical approach, implementation plan
@@ -93,7 +94,7 @@ bash deploy.sh
 
 ### Step 2b: Update the AgentCore Runtime
 
-The agent trace and the runtime-reported job status need the runtime from the same commit:
+The agent trace and the runtime-reported job status need the runtime from the same commit. Recommended order: `deploy_ops.sh` (Lambda), `deploy.sh` (web), then the runtime. Any other order is safe too: a failed run never writes `token_usage.json`, which Lambdas from before this change read as success, and a runtime from before this change is still handled through `token_usage.json`.
 
 ```bash
 cd ../managed-agentcore
@@ -267,7 +268,7 @@ aws logs tail /aws/lambda/deep-insight-job-complete --region us-west-2 --since 1
 
 ### DynamoDB record stuck in "Start"
 
-The runtime uploads `job_status.json` when the run ends, and the Lambda updates the job by `job_id`. A job left in `Start` means the runtime stopped without reporting, or runs an older version; the stale job sweep marks it Failed after `STALE_JOB_MINUTES`.
+The runtime uploads `job_status.json` when the run ends, and the Lambda updates the job by `job_id`. A job left in `Start` means the runtime stopped without reporting, or runs an older version; the stale job sweep marks it Failed once its trace stops updating for `STALE_HEARTBEAT_MINUTES` (or `STALE_JOB_MINUTES` after start, without a trace).
 
 ```bash
 # Check what the runtime uploaded (job_status.json, token_usage.json) and the trace

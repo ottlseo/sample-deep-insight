@@ -88,6 +88,9 @@ def track_job_failure(upload_id: str, error_message: str):
     """Mark job as Failed and send SNS failure notification.
 
     Called when the SSE stream from AgentCore errors out or disconnects.
+    The runtime and the ops Lambda may already have recorded Success by then
+    (the stream can break after the run reported its result). Success is
+    final: the write is conditional, and no failure mail goes out for it.
 
     Args:
         upload_id: The job_id (DynamoDB PK).
@@ -101,14 +104,19 @@ def track_job_failure(upload_id: str, error_message: str):
         table.update_item(
             Key={"job_id": upload_id},
             UpdateExpression="SET #s = :status, ended_at = :ended, error_message = :err",
+            ConditionExpression="attribute_not_exists(#s) OR #s <> :success",
             ExpressionAttributeNames={"#s": "status"},
             ExpressionAttributeValues={
                 ":status": "Failed",
+                ":success": "Success",
                 ":ended": int(time.time()),
                 ":err": error_message[:1000],
             },
         )
         logger.info(f"Job tracking: Failed recorded for job_id={upload_id}")
+    except table.meta.client.exceptions.ConditionalCheckFailedException:
+        logger.info(f"Job tracking: job_id={upload_id} already Success — stream error not recorded")
+        return
     except Exception as e:
         logger.warning(f"Job tracking: Failure write failed (non-breaking): {e}")
 

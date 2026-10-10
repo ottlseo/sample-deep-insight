@@ -273,6 +273,20 @@ def _get_output_session_id(request_id: str) -> str:
     print(f"⚠️ No session ID found for request {request_id}, using request_id as fallback", flush=True)
     return request_id
 
+def _token_usage_summary():
+    """Run-wide token totals, or None if no model call finished."""
+    from src.graph.nodes import _global_node_states
+    token_usage = _global_node_states.get('shared', {}).get('token_usage', {})
+    if not token_usage or token_usage.get('total_tokens', 0) == 0:
+        return None
+    return {
+        "total_tokens": token_usage.get('total_tokens', 0),
+        "total_input_tokens": token_usage.get('total_input_tokens', 0),
+        "total_output_tokens": token_usage.get('total_output_tokens', 0),
+        "cache_read_input_tokens": token_usage.get('cache_read_input_tokens', 0),
+        "cache_write_input_tokens": token_usage.get('cache_write_input_tokens', 0)
+    }
+
 def _save_token_usage_to_s3(request_id: str, job_id: str = None) -> None:
     """
     Save token usage statistics directly to S3.
@@ -280,6 +294,10 @@ def _save_token_usage_to_s3(request_id: str, job_id: str = None) -> None:
     Uploads token usage files to S3:
     - s3://{bucket}/deep-insight/fargate_sessions/{session_id}/output/token_usage.json
     - s3://{bucket}/deep-insight/fargate_sessions/{session_id}/output/token_usage.txt
+
+    Successful runs only. Ops Lambdas that predate job_status.json treat this
+    file as "the job succeeded", so a failed run puts its token totals in
+    job_status.json instead (_save_job_report_to_s3).
 
     Args:
         request_id (str): Request identifier to retrieve session ID
@@ -308,13 +326,7 @@ def _save_token_usage_to_s3(request_id: str, job_id: str = None) -> None:
         "request_id": request_id,
         "job_id": job_id,
         "timestamp": timestamp,
-        "summary": {
-            "total_tokens": token_usage.get('total_tokens', 0),
-            "total_input_tokens": token_usage.get('total_input_tokens', 0),
-            "total_output_tokens": token_usage.get('total_output_tokens', 0),
-            "cache_read_input_tokens": token_usage.get('cache_read_input_tokens', 0),
-            "cache_write_input_tokens": token_usage.get('cache_write_input_tokens', 0)
-        },
+        "summary": _token_usage_summary(),
         "by_agent": token_usage.get('by_agent', {})
     }
 
@@ -522,6 +534,8 @@ def _save_job_report_to_s3(request_id: str, job_id: str, session_id: str, trace_
                 "trace_path": trace_uploader.key,
                 # For the dashboard's job list; the full answer is in the trace
                 "output_preview": event_log.last_text.strip()[:500],
+                # Failed runs write no token_usage.json (see _save_token_usage_to_s3)
+                "token_usage": _token_usage_summary() if status != "Success" else None,
             }, ensure_ascii=False),
             ContentType='application/json'
         )
@@ -865,10 +879,10 @@ async def agentcore_streaming_execution(
             checkpoint_task.cancel()
         # Cleanup normally ran in Step 8 above; this covers the paths that never
         # reached it (an exception mid-stream, or the client disconnecting).
-        # Same order as the success path: token usage and session before cleanup,
-        # the failure report after it.
+        # Same order as the success path: session before cleanup, the failure
+        # report after it. No token_usage.json here: older ops Lambdas read it
+        # as success; the failure report carries the token totals instead.
         if not report_saved and session_id is None:
-            _save_token_usage_to_s3(request_id, job_id)
             session_id = _get_output_session_id(request_id)
         if not cleanup_done:
             _cleanup_request_session(request_id)

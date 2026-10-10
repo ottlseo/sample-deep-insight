@@ -51,6 +51,8 @@ def aws(monkeypatch):
         monkeypatch.setenv("DYNAMODB_TABLE_NAME", TABLE)
         monkeypatch.setenv("SNS_TOPIC_ARN", topic)
         monkeypatch.setenv("STALE_JOB_MINUTES", "120")
+        monkeypatch.setenv("STALE_HEARTBEAT_MINUTES", "30")
+        monkeypatch.setenv("S3_BUCKET_NAME", BUCKET)
         import job_complete
         module = importlib.reload(job_complete)
         sent = []
@@ -76,10 +78,11 @@ def _s3_event(key):
     return {"Records": [{"s3": {"bucket": {"name": BUCKET}, "object": {"key": key}}}]}
 
 
-def _report(lam, status, job_id="job-1", error=""):
+def _report(lam, status, job_id="job-1", error="", **extra):
     _put(OUTPUT + "job_status.json", {"job_id": job_id, "session_id": SESSION, "status": status,
                                       "error": error, "ended_at": int(time.time()),
-                                      "trace_path": OUTPUT + "events.jsonl", "output_preview": "Top segment: 30s women"})
+                                      "trace_path": OUTPUT + "events.jsonl", "output_preview": "Top segment: 30s women",
+                                      **extra})
     lam.handler(_s3_event(OUTPUT + "job_status.json"), None)
 
 
@@ -130,9 +133,41 @@ def test_duplicate_success_event_is_skipped(aws):
     assert aws.sent == ["Deep Insight Job Completed"]
 
 
-def test_job_status_without_job_id_is_ignored(aws):
-    _report(aws, "Success", job_id=None)
+def test_job_status_without_job_id_and_no_job_record_is_ignored(aws):
+    _report(aws, "Success", job_id=None)  # e.g. an eval harness run
     assert aws.sent == []
+
+
+def test_job_status_without_job_id_settles_the_linked_job(aws):
+    # job_id null, token_usage.json carries the key (null): the legacy trigger
+    # skips it, so job_status.json must settle the job via the session link
+    _start_job(session_id=SESSION)
+    _put(OUTPUT + "token_usage.json", {**TOKENS, "job_id": None})
+    aws.handler(_s3_event(OUTPUT + "token_usage.json"), None)
+    assert _table().get_item(Key={"job_id": "job-1"})["Item"]["status"] == "Start"
+    _report(aws, "Success", job_id=None)
+    job = _table().get_item(Key={"job_id": "job-1"})["Item"]
+    assert job["status"] == "Success" and job["total_tokens"] == 1500
+    assert aws.sent == ["Deep Insight Job Completed"]
+
+
+def test_failed_run_takes_token_totals_from_job_status(aws):
+    # Failed runs write no token_usage.json (older Lambdas would read it as Success)
+    _start_job()
+    _report(aws, "Failed", error="boom", token_usage=TOKENS["summary"])
+    job = _table().get_item(Key={"job_id": "job-1"})["Item"]
+    assert job["status"] == "Failed" and job["total_tokens"] == 1500
+
+
+def test_failed_never_replaces_success(aws):
+    _start_job()
+    _report(aws, "Success")
+    _report(aws, "Failed", error="late failure report")
+    # also when Success lands between the Lambda's read and its write
+    assert aws._update_job(_table(), "job-1", {"status": "Failed"}, keep_success=True) is False
+    job = _table().get_item(Key={"job_id": "job-1"})["Item"]
+    assert job["status"] == "Success"
+    assert aws.sent == ["Deep Insight Job Completed"]
 
 
 def test_legacy_token_usage_trigger_skips_new_runtime(aws):
@@ -160,6 +195,27 @@ def test_sweep_marks_only_stale_start_jobs(aws):
     assert status == {"stale": "Failed", "fresh": "Start", "done": "Success"}
     assert "No completion signal" in _table().get_item(Key={"job_id": "stale"})["Item"]["error_message"]
     assert aws.sent == ["Deep Insight Job Failed"]
+
+
+def test_sweep_keeps_a_long_job_with_a_fresh_heartbeat(aws):
+    # 3 hours in (plan revisions, HITL waits, long Coder/Reporter), trace just uploaded
+    _start_job("long", started_at=int(time.time()) - 3 * 3600)
+    _put("deep-insight/traces/long/events.jsonl", {})
+    aws.handler({"source": "aws.events"}, None)
+    assert _table().get_item(Key={"job_id": "long"})["Item"]["status"] == "Start"
+    assert aws.sent == []
+
+
+def test_sweep_marks_a_job_whose_heartbeat_stopped(aws, monkeypatch):
+    now = int(time.time())
+    _start_job("dead", started_at=now - 50 * 60)
+    _start_job("quiet", started_at=now - 50 * 60)
+    beats = {"dead": now - 40 * 60, "quiet": now - 10 * 60}
+    monkeypatch.setattr(aws, "_trace_heartbeat", lambda s3, job_id: beats[job_id])
+    aws.handler({"source": "aws.events"}, None)
+    dead = _table().get_item(Key={"job_id": "dead"})["Item"]
+    assert dead["status"] == "Failed" and "No sign of life" in dead["error_message"]
+    assert _table().get_item(Key={"job_id": "quiet"})["Item"]["status"] == "Start"
 
 
 def test_late_success_overrides_sweep(aws):

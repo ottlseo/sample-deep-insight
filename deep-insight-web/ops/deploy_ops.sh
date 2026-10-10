@@ -240,7 +240,15 @@ if [ -z "$LAMBDA_ROLE_ARN" ] || [ "$LAMBDA_ROLE_ARN" = "None" ]; then
     echo "Waiting for IAM role propagation..."
     sleep 10
 
-    LAMBDA_POLICY=$(cat <<POLICY
+
+    echo "Lambda Role: ${LAMBDA_ROLE_ARN} (created)"
+else
+    echo "Lambda Role: ${LAMBDA_ROLE_ARN} (already exists)"
+fi
+
+# Policy on every run, so existing deployments pick up new permissions
+# (traces/* read: the stale-job sweep uses the trace as a heartbeat)
+LAMBDA_POLICY=$(cat <<POLICY
 {
     "Version": "2012-10-17",
     "Statement": [
@@ -276,7 +284,8 @@ if [ -z "$LAMBDA_ROLE_ARN" ] || [ "$LAMBDA_ROLE_ARN" = "None" ]; then
             ],
             "Resource": [
                 "arn:aws:s3:::${S3_BUCKET}",
-                "arn:aws:s3:::${S3_BUCKET}/deep-insight/fargate_sessions/*"
+                "arn:aws:s3:::${S3_BUCKET}/deep-insight/fargate_sessions/*",
+                "arn:aws:s3:::${S3_BUCKET}/deep-insight/traces/*"
             ]
         },
         {
@@ -290,19 +299,19 @@ if [ -z "$LAMBDA_ROLE_ARN" ] || [ "$LAMBDA_ROLE_ARN" = "None" ]; then
 POLICY
 )
 
-    aws iam put-role-policy \
-        --role-name "$LAMBDA_ROLE_NAME" \
-        --policy-name "${LAMBDA_ROLE_NAME}-policy" \
-        --policy-document "$LAMBDA_POLICY"
+aws iam put-role-policy \
+    --role-name "$LAMBDA_ROLE_NAME" \
+    --policy-name "${LAMBDA_ROLE_NAME}-policy" \
+    --policy-document "$LAMBDA_POLICY"
+echo "Lambda Role policy: ${LAMBDA_ROLE_NAME}-policy applied"
 
-    echo "Lambda Role: ${LAMBDA_ROLE_ARN} (created)"
-else
-    echo "Lambda Role: ${LAMBDA_ROLE_ARN} (already exists)"
-fi
 
 # ---------- Step 5: Lambda Function ----------
 
 echo "=== Step 5: Lambda Function ==="
+
+# S3_BUCKET_NAME: the stale-job sweep reads trace timestamps (heartbeat)
+LAMBDA_ENV="DYNAMODB_TABLE_NAME=${DYNAMODB_TABLE},SNS_TOPIC_ARN=${SNS_TOPIC_ARN},S3_BUCKET_NAME=${S3_BUCKET}"
 
 # Zip the Lambda code
 LAMBDA_ZIP="/tmp/deep-insight-job-complete.zip"
@@ -320,7 +329,7 @@ if [ -z "$EXISTING_LAMBDA" ] || [ "$EXISTING_LAMBDA" = "None" ]; then
         --zip-file "fileb://${LAMBDA_ZIP}" \
         --timeout 60 \
         --memory-size 256 \
-        --environment "Variables={DYNAMODB_TABLE_NAME=${DYNAMODB_TABLE},SNS_TOPIC_ARN=${SNS_TOPIC_ARN}}" \
+        --environment "Variables={${LAMBDA_ENV}}" \
         --region "$REGION" \
         --query "FunctionArn" --output text)
 
@@ -332,7 +341,12 @@ else
         --function-name "$LAMBDA_FUNC_NAME" \
         --zip-file "fileb://${LAMBDA_ZIP}" \
         --region "$REGION" > /dev/null
-    echo "Lambda: ${EXISTING_LAMBDA} (code updated)"
+    aws lambda wait function-updated-v2 --function-name "$LAMBDA_FUNC_NAME" --region "$REGION"
+    aws lambda update-function-configuration \
+        --function-name "$LAMBDA_FUNC_NAME" \
+        --environment "Variables={${LAMBDA_ENV}}" \
+        --region "$REGION" > /dev/null
+    echo "Lambda: ${EXISTING_LAMBDA} (code and environment updated)"
 fi
 
 rm -f "$LAMBDA_ZIP"

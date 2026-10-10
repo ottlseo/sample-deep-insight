@@ -41,3 +41,24 @@ def test_unknown_job(tracker):
 def test_not_configured(tracker, monkeypatch):
     monkeypatch.setattr(tracker, "DYNAMODB_TABLE_NAME", "")
     assert tracker.get_job_status("j1") is None
+
+
+def test_stream_error_never_replaces_success(tracker, monkeypatch):
+    # the runtime and Lambda recorded Success; then the web server's stream broke
+    table = boto3.resource("dynamodb").Table("jobs")
+    table.put_item(Item={"job_id": "j2", "status": "Success", "session_id": "s2"})
+    mails = []
+    monkeypatch.setattr(tracker, "_notify_failure", lambda job_id, err: mails.append(job_id))
+    tracker.track_job_failure("j2", "Read timed out")
+    assert table.get_item(Key={"job_id": "j2"})["Item"]["status"] == "Success"
+    assert mails == []
+
+
+def test_stream_error_records_failed_while_running(tracker, monkeypatch):
+    table = boto3.resource("dynamodb").Table("jobs")
+    table.put_item(Item={"job_id": "j3", "status": "Start"})
+    mails = []
+    monkeypatch.setattr(tracker, "_notify_failure", lambda job_id, err: mails.append(job_id))
+    tracker.track_job_failure("j3", "Stream interrupted")
+    assert table.get_item(Key={"job_id": "j3"})["Item"]["status"] == "Failed"
+    assert mails == ["j3"]

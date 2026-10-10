@@ -8,27 +8,38 @@ Three triggers:
    The runtime writes it on every exit path -- success, exception, client
    disconnect -- so the job settles even if the browser stream was cut off.
    1. Read job_status.json (job_id, session_id, Success/Failed, error)
-   2. Get the DynamoDB record by job_id
+   2. Get the DynamoDB record by job_id; without one (job_id null), by the
+      session_id the web server linked
    3. Idempotency guard: skip if already Success
-   4. Read token_usage.json (if present) and list artifacts
+   4. Token usage from token_usage.json (success) or job_status.json (failure)
+      and the artifact list
    5. Update the record with the final status, stats and trace path
    6. Publish SNS notification if the status changed
 
 2. S3 PUT of token_usage.json (runtimes that predate job_status.json):
      s3://{bucket}/deep-insight/fargate_sessions/{session_id}/output/token_usage.json
-   1. Skip if the file carries job_id (trigger 1 reports that job)
+   1. Skip if the file has a job_id key, even null: the runtime that writes it
+      also writes job_status.json, and trigger 1 reports that job
    2. Find the DynamoDB record via SessionIdIndex GSI
    3. Idempotency guard: skip if already Success
    4. Update the record with Success status and stats, publish SNS
 
-3. EventBridge schedule: jobs still in Start after STALE_JOB_MINUTES become
-   Failed. Covers a runtime that died without writing job_status.json. A later
+3. EventBridge schedule: jobs in Start with no sign of life become Failed.
+   The runtime re-uploads the job's trace at least every 5 minutes while it
+   runs, so its last-modified time is a heartbeat: a job whose trace hasn't
+   changed for STALE_HEARTBEAT_MINUTES is dead. Jobs without a trace (older
+   runtimes) fall back to STALE_JOB_MINUTES since they started. A later
    job_status.json Success still overrides it.
+
+Success is final: no path here or in the web server (job_tracker.py)
+replaces a Success with Failed.
 
 Environment variables:
   DYNAMODB_TABLE_NAME: DynamoDB table name (e.g., deep-insight-jobs)
   SNS_TOPIC_ARN: SNS topic ARN for notifications
-  STALE_JOB_MINUTES: minutes before a Start job is marked Failed (default 120)
+  S3_BUCKET_NAME: bucket holding the traces (for the heartbeat)
+  STALE_HEARTBEAT_MINUTES: minutes without a trace update before a job is Failed (default 30)
+  STALE_JOB_MINUTES: minutes since start, for jobs without a trace (default 120)
 """
 
 import json
@@ -44,9 +55,13 @@ logger.setLevel(logging.INFO)
 
 DYNAMODB_TABLE_NAME = os.environ.get("DYNAMODB_TABLE_NAME", "")
 SNS_TOPIC_ARN = os.environ.get("SNS_TOPIC_ARN", "")
+S3_BUCKET_NAME = os.environ.get("S3_BUCKET_NAME", "")
+STALE_HEARTBEAT_MINUTES = int(os.environ.get("STALE_HEARTBEAT_MINUTES", "30"))
 STALE_JOB_MINUTES = int(os.environ.get("STALE_JOB_MINUTES", "120"))
 
 SESSIONS_PREFIX = "deep-insight/fargate_sessions/"
+TRACES_PREFIX = "deep-insight/traces/"
+NOT_SUCCESS = "attribute_not_exists(#s) OR #s <> :success"
 
 
 def handler(event, context):
@@ -86,17 +101,19 @@ def _process_job_status(bucket: str, key: str):
     # Step 1: Read job_status.json
     status_data = _read_json(s3, bucket, key)
     job_id = status_data.get("job_id")
-    if not job_id:
-        logger.info(f"No job_id in {key} (not a Web UI job) — skipping")
-        return
-
     session_id = status_data.get("session_id", "")
     new_status = "Success" if status_data.get("status") == "Success" else "Failed"
 
-    # Step 2: Get the DynamoDB record by job_id
-    job_record = table.get_item(Key={"job_id": job_id}).get("Item")
+    # Step 2: Get the DynamoDB record by job_id, else by the linked session_id.
+    # The token_usage.json trigger skips this runtime's files, so this is the
+    # only place their jobs settle.
+    if job_id:
+        job_record = table.get_item(Key={"job_id": job_id}).get("Item")
+    else:
+        job_record = _find_job_by_session_id(table, session_id)
+        job_id = job_record.get("job_id") if job_record else None
     if not job_record:
-        logger.warning(f"No DynamoDB record found for job_id={job_id}")
+        logger.info(f"No job record for job_id={job_id}, session_id={session_id} (not a Web UI job) — skipping")
         return
 
     # Step 3: Idempotency guard
@@ -105,9 +122,14 @@ def _process_job_status(bucket: str, key: str):
         logger.info(f"Job {job_id} already marked Success — skipping")
         return
 
-    # Step 4: Token usage (absent if no model call finished) and artifacts
+    # Step 4: Token usage and artifacts. A successful run writes
+    # token_usage.json; a failed one carries the summary in job_status.json
+    # (so that Lambdas predating job_status.json never see a failed run's
+    # token_usage.json and report it as Success).
     output_prefix = key.rsplit("/", 1)[0] + "/"
     token_data = _read_json(s3, bucket, output_prefix + "token_usage.json")
+    if not token_data and status_data.get("token_usage"):
+        token_data = {"summary": status_data["token_usage"]}
     artifacts = _list_artifacts(s3, bucket, session_id)
     stats = _job_stats(token_data, artifacts, session_id)
 
@@ -128,7 +150,9 @@ def _process_job_status(bucket: str, key: str):
         fields["error_message"] = status_data.get("error") or "Run failed"
     else:
         remove.append("error_message")  # from an earlier stale-job sweep
-    _update_job(table, job_id, fields, remove)
+    if not _update_job(table, job_id, fields, remove, keep_success=new_status == "Failed"):
+        logger.info(f"Job {job_id} became Success meanwhile — Failed not recorded")
+        return
     logger.info(f"DynamoDB updated: job_id={job_id}, status={new_status}, previous={previous_status}")
 
     # Step 6: Notify only on a status change. The web server already notified
@@ -168,8 +192,9 @@ def _process_job_complete(bucket: str, key: str):
     if not token_data:
         return
 
-    # Runtimes that write job_id also write job_status.json, which reports the
-    # job (including failures). Handling both would process the job twice.
+    # Runtimes that write a job_id key (even null) also write job_status.json,
+    # which reports the job, including failures and jobs without a job_id.
+    # Handling both would process the job twice.
     if "job_id" in token_data:
         logger.info(f"token_usage.json carries job_id — reported by job_status.json, skipping")
         return
@@ -214,29 +239,43 @@ def _process_job_complete(bucket: str, key: str):
 
 
 def _sweep_stale_jobs():
-    """Mark jobs still in Start after STALE_JOB_MINUTES as Failed."""
+    """Mark jobs in Start with no sign of life as Failed.
+
+    Sign of life: the trace's last upload (the runtime re-uploads it at least
+    every 5 minutes), else the start time for jobs without a trace.
+    """
     table = _get_table()
+    s3 = boto3.client("s3")
     now = int(time.time())
-    cutoff = now - STALE_JOB_MINUTES * 60
-    error = f"No completion signal within {STALE_JOB_MINUTES} minutes (runtime stopped without reporting)"
+    candidates_before = now - min(STALE_HEARTBEAT_MINUTES, STALE_JOB_MINUTES) * 60
 
     query = {
         "IndexName": "StatusStartedIndex",
         "KeyConditionExpression": "#s = :start AND started_at < :cutoff",
         "ExpressionAttributeNames": {"#s": "status"},
-        "ExpressionAttributeValues": {":start": "Start", ":cutoff": cutoff},
+        "ExpressionAttributeValues": {":start": "Start", ":cutoff": candidates_before},
     }
-    stale = []
+    candidates = []
     while True:
         response = table.query(**query)
-        stale.extend(response.get("Items", []))
+        candidates.extend(response.get("Items", []))
         if "LastEvaluatedKey" not in response:
             break
         query["ExclusiveStartKey"] = response["LastEvaluatedKey"]
 
     marked = 0
-    for job in stale:
+    for job in candidates:
         job_id = job["job_id"]
+        heartbeat = _trace_heartbeat(s3, job_id)
+        if heartbeat is not None:
+            idle_minutes = (now - max(heartbeat, int(job.get("started_at", 0)))) / 60
+            if idle_minutes < STALE_HEARTBEAT_MINUTES:
+                continue
+            error = f"No sign of life for {STALE_HEARTBEAT_MINUTES} minutes (trace not updated; runtime stopped without reporting)"
+        else:
+            if (now - int(job.get("started_at", now))) / 60 < STALE_JOB_MINUTES:
+                continue
+            error = f"No completion signal within {STALE_JOB_MINUTES} minutes (runtime stopped without reporting)"
         try:
             # Condition: a status report may land between the query and this write
             table.update_item(
@@ -251,7 +290,19 @@ def _sweep_stale_jobs():
         marked += 1
         _publish_failure_notification(job_id, job, error)
 
-    logger.info(f"Stale job sweep: {len(stale)} found, {marked} marked Failed (cutoff {STALE_JOB_MINUTES} min)")
+    logger.info(f"Stale job sweep: {len(candidates)} candidates, {marked} marked Failed "
+                f"(heartbeat {STALE_HEARTBEAT_MINUTES} min, no trace {STALE_JOB_MINUTES} min)")
+
+
+def _trace_heartbeat(s3, job_id: str):
+    """Epoch seconds of the job's last trace upload, or None if it has no trace."""
+    if not S3_BUCKET_NAME:
+        return None
+    try:
+        head = s3.head_object(Bucket=S3_BUCKET_NAME, Key=f"{TRACES_PREFIX}{job_id}/events.jsonl")
+        return int(head["LastModified"].timestamp())
+    except Exception:
+        return None
 
 
 # ---------- Helpers ----------
@@ -290,20 +341,34 @@ def _job_stats(token_data: dict, artifacts: list, session_id: str) -> dict:
     }
 
 
-def _update_job(table, job_id: str, fields: dict, remove: list = ()):
-    """SET every field (and REMOVE the listed ones) on the job record."""
+def _update_job(table, job_id: str, fields: dict, remove: list = (), keep_success: bool = False) -> bool:
+    """SET every field (and REMOVE the listed ones) on the job record.
+
+    keep_success: write only if the job isn't Success (Success is final).
+    Returns False if that condition stopped the write.
+    """
     names = {f"#{k}": k for k in fields}
     values = {f":{k}": v for k, v in fields.items()}
     expression = "SET " + ", ".join(f"#{k} = :{k}" for k in fields)
     if remove:
         names.update({f"#{k}": k for k in remove})
         expression += " REMOVE " + ", ".join(f"#{k}" for k in remove)
-    table.update_item(
-        Key={"job_id": job_id},
-        UpdateExpression=expression,
-        ExpressionAttributeNames=names,
-        ExpressionAttributeValues=values,
-    )
+    extra = {}
+    if keep_success:
+        names["#s"] = "status"
+        values[":success"] = "Success"
+        extra["ConditionExpression"] = NOT_SUCCESS
+    try:
+        table.update_item(
+            Key={"job_id": job_id},
+            UpdateExpression=expression,
+            ExpressionAttributeNames=names,
+            ExpressionAttributeValues=values,
+            **extra,
+        )
+    except table.meta.client.exceptions.ConditionalCheckFailedException:
+        return False
+    return True
 
 
 def _read_json(s3, bucket: str, key: str) -> dict:
