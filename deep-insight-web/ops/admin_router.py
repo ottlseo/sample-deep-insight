@@ -15,7 +15,7 @@ from urllib.parse import quote
 import boto3
 from botocore.exceptions import ClientError
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from pydantic import BaseModel
 
 from ops.auth import require_admin
@@ -386,21 +386,25 @@ def get_job_file(job_id: str, area: str, filename: str, download: bool = False,
 
     try:
         s3 = boto3.client("s3", region_name=AWS_REGION)
-        body = s3.get_object(Bucket=S3_BUCKET_NAME, Key=key)["Body"].read()
+        obj = s3.get_object(Bucket=S3_BUCKET_NAME, Key=key)
     except Exception as e:
         logger.error(f"Get job file failed: {key}: {e}")
         raise HTTPException(status_code=404, detail="File not found")
 
+    # Streamed in chunks: a large input CSV must not be held in the web task's memory
+    body = obj["Body"].iter_chunks(chunk_size=1024 * 1024)
+    length = {"Content-Length": str(obj["ContentLength"])} if obj.get("ContentLength") is not None else {}
     name = filename.rsplit("/", 1)[-1]
     inline_type = _INLINE_TYPES.get(Path(name).suffix.lower())
     if inline_type and not download:
-        return Response(content=body, media_type=inline_type, headers={
+        return StreamingResponse(body, media_type=inline_type, headers={
             "Content-Security-Policy": "sandbox",
             "X-Content-Type-Options": "nosniff",
+            **length,
         })
 
     # RFC 5987: ASCII fallback + UTF-8 encoded filename for non-ASCII characters
     ext = name.rsplit(".", 1)[-1] if "." in name else "bin"
     disposition = f"attachment; filename=\"download.{ext}\"; filename*=UTF-8''{quote(name)}"
-    return Response(content=body, media_type="application/octet-stream",
-                    headers={"Content-Disposition": disposition})
+    return StreamingResponse(body, media_type="application/octet-stream",
+                             headers={"Content-Disposition": disposition, **length})

@@ -409,7 +409,7 @@ class strands_utils():
                     put_event(agentcore_event)
                     yield agentcore_event
 
-            # After streaming completes, extract usage info from agent's metrics (에이전트 응답이 종료된 이후 최종적으로 한번만 보낸다)
+            # After streaming completes, extract usage info from agent's metrics (sent once, when the agent's response has ended)
             # Reference: https://strandsagents.com/latest/documentation/docs/user-guide/observability-evaluation/metrics/
             try:
                 usage_info = None

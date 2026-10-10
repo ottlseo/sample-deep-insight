@@ -536,9 +536,30 @@
             if (job && job.status === 'Start') drawerTimer = setTimeout(refreshDrawer, 15000);
         }
 
+        // A running job's panel: fetch just that job (the 30 s list refresh
+        // covers the rest), its trace, and its files once it has finished
         async function refreshDrawer() {
-            await fetchJobs();
-            if (drawerJobId) { renderDrawerHeader(); loadDrawerTrace(); loadDrawerFiles(); }
+            var jobId = drawerJobId;
+            if (!jobId) return;
+            var before = findJob(jobId);
+            try {
+                var res = await fetch('/admin/api/jobs/' + encodeURIComponent(jobId));
+                var data = await res.json();
+                if (data.success) {
+                    var i = allJobs.findIndex(function(j) { return j.job_id === jobId; });
+                    if (i >= 0) allJobs[i] = data.job; else allJobs.push(data.job);
+                }
+            } catch (e) {
+                // keep the last known record; the next round tries again
+            }
+            if (jobId !== drawerJobId) return;
+            var after = findJob(jobId);
+            renderDrawerHeader();
+            loadDrawerTrace();
+            if (after && before && after.status !== before.status) {
+                loadDrawerFiles();
+                renderJobs();
+            }
         }
 
         // Drag the panel's left edge to resize it; the width is kept for next time

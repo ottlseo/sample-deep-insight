@@ -202,22 +202,32 @@ class EventLog:
         """True for the usage event an agent emits once its invocation finishes."""
         return event.get("event_type") == "usage_metadata" and "model_id" in event
 
-    def snapshot(self) -> bytes:
-        """Everything recorded so far, plus the record still being merged.
+    def snapshot_ref(self):
+        """A cheap handle on the log as it is now: (path, size, open record).
 
-        The open record is serialized without closing it, so a snapshot taken
-        mid-response doesn't split that response into two records.
+        Taken on the event loop; read_snapshot() does the file I/O elsewhere.
+        The first `size` bytes are complete lines, so appends made after this
+        call don't affect what is read. The open record is serialized without
+        closing it, so a snapshot taken mid-response doesn't split it.
         """
         self._file.flush()
-        with open(self.path, "rb") as f:
-            data = f.read()
+        tail = b""
         if self._pending is not None:
             record = dict(self._pending)
             if record["kind"] == "tool_use":
                 record["input"] = _parse_tool_input(record["input"])
-            line = json.dumps({"seq": self._seq + 1, **_cap(record)}, ensure_ascii=False, default=str)
-            data += (line + "\n").encode("utf-8")
-        return data
+            tail = (json.dumps({"seq": self._seq + 1, **_cap(record)}, ensure_ascii=False, default=str) + "\n").encode("utf-8")
+        return self.path, self._file.tell(), tail
+
+    @staticmethod
+    def read_snapshot(ref) -> bytes:
+        path, size, tail = ref
+        with open(path, "rb") as f:
+            return f.read(size) + tail
+
+    def snapshot(self) -> bytes:
+        """Everything recorded so far, plus the record still being merged."""
+        return self.read_snapshot(self.snapshot_ref())
 
     def close(self) -> None:
         """Flush the last record and close the file. Safe to call twice."""
@@ -266,7 +276,10 @@ class TraceUploader:
                 return
             self._uploaded_version = version
             self._uploaded_at = time.monotonic()
-            self._executor.submit(self._put, self.event_log.snapshot())
+            # File read and upload on the worker thread: the event loop only
+            # takes the handle, so the stream isn't held up by large logs
+            ref = self.event_log.snapshot_ref()
+            self._executor.submit(lambda: self._put(EventLog.read_snapshot(ref)))
         except Exception as e:
             logger.warning(f"Trace checkpoint skipped ({e})")
 

@@ -502,8 +502,8 @@ def _save_job_report_to_s3(request_id: str, job_id: str, session_id: str, trace_
         request_id (str): Request identifier
         job_id (str): Ops job ID from the payload (None outside the Web UI)
         session_id (str): Session whose output folder gets job_status.json
-        trace_uploader (TraceUploader): None if S3 is not configured
-        event_log (EventLog): Trace recorded during the run
+        trace_uploader (TraceUploader): None if S3 is not configured or setup failed
+        event_log (EventLog): Trace recorded during the run (None if setup failed)
         status (str): "Success" or "Failed"
         error (str): Failure description
     """
@@ -511,18 +511,22 @@ def _save_job_report_to_s3(request_id: str, job_id: str, session_id: str, trace_
     import time
     import boto3
 
-    if trace_uploader is None:
-        event_log.discard()
+    s3_bucket = os.getenv('S3_BUCKET_NAME')
+    if not s3_bucket:
+        if event_log:
+            event_log.discard()
         return
 
     try:
-        if trace_uploader.finish():
+        # The trace may be missing if the run failed while setting it up;
+        # the status is written regardless
+        if trace_uploader and trace_uploader.finish():
             print(f"✅ Agent trace uploaded to S3: s3://{trace_uploader.bucket}/{trace_uploader.key}", flush=True)
 
         status_key = f"deep-insight/fargate_sessions/{session_id}/output/job_status.json"
         s3_client = boto3.client('s3', region_name=os.getenv('AWS_REGION', 'us-east-1'))
         s3_client.put_object(
-            Bucket=trace_uploader.bucket,
+            Bucket=s3_bucket,
             Key=status_key,
             Body=json.dumps({
                 "job_id": job_id,
@@ -531,19 +535,20 @@ def _save_job_report_to_s3(request_id: str, job_id: str, session_id: str, trace_
                 "status": status,
                 "error": error[:1000],
                 "ended_at": int(time.time()),
-                "trace_path": trace_uploader.key,
+                "trace_path": trace_uploader.key if trace_uploader else "",
                 # For the dashboard's job list; the full answer is in the trace
-                "output_preview": event_log.last_text.strip()[:500],
+                "output_preview": event_log.last_text.strip()[:500] if event_log else "",
                 # Failed runs write no token_usage.json (see _save_token_usage_to_s3)
                 "token_usage": _token_usage_summary() if status != "Success" else None,
             }, ensure_ascii=False),
             ContentType='application/json'
         )
-        print(f"✅ Job status ({status}) uploaded to S3: s3://{trace_uploader.bucket}/{status_key}", flush=True)
+        print(f"✅ Job status ({status}) uploaded to S3: s3://{s3_bucket}/{status_key}", flush=True)
     except Exception as e:
         print(f"⚠️ Failed to upload job report to S3: {e}", flush=True)
     finally:
-        event_log.discard()
+        if event_log:
+            event_log.discard()
 
 def _describe_failure(error: BaseException) -> str:
     """Failure message for job_status.json."""
@@ -767,19 +772,6 @@ async def agentcore_streaming_execution(
     user_query = _extract_user_query(payload)
     job_id = payload.get("job_id")
 
-    # Full agent trace for the ops dashboard, including the tool events that
-    # STREAM_EVENT_TYPES keeps out of the response stream.
-    event_log = EventLog(request_id)
-    event_log.record_input(
-        prompt=user_query,
-        data_directory=payload.get("data_directory"),
-        job_id=job_id,
-        request_id=request_id,
-    )
-    trace_uploader = _create_trace_uploader(job_id, request_id, event_log)
-    # Agents can run for many minutes; keep the dashboard's view current meanwhile
-    checkpoint_task = asyncio.create_task(trace_uploader.checkpoint_periodically()) if trace_uploader else None
-
     context_token = set_session_context(AGENTCORE_SESSION_NAME)
 
     # The final event is held back until teardown finishes -- see Step 5 below.
@@ -788,8 +780,23 @@ async def agentcore_streaming_execution(
     report_saved = False
     session_id = None
     failure = ""
+    event_log = trace_uploader = checkpoint_task = None
 
     try:
+        # Full agent trace for the ops dashboard, including the tool events that
+        # STREAM_EVENT_TYPES keeps out of the response stream. Inside the try,
+        # so a failure here still reports the job and cleans up (finally).
+        event_log = EventLog(request_id)
+        event_log.record_input(
+            prompt=user_query,
+            data_directory=payload.get("data_directory"),
+            job_id=job_id,
+            request_id=request_id,
+        )
+        trace_uploader = _create_trace_uploader(job_id, request_id, event_log)
+        # Agents can run for many minutes; keep the dashboard's view current meanwhile
+        checkpoint_task = asyncio.create_task(trace_uploader.checkpoint_periodically()) if trace_uploader else None
+
         # Step 3: Setup observability tracing
         tracer = trace.get_tracer(
             instrumenting_module_name=os.getenv("TRACER_MODULE_NAME", TRACER_MODULE_NAME_DEFAULT),

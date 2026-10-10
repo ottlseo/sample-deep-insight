@@ -178,3 +178,15 @@ def test_successful_run_writes_token_usage_file(s3, monkeypatch, tokens):
     _run(monkeypatch, FakeGraph([TEXT]))
     assert "deep-insight/fargate_sessions/sess-1/output/token_usage.json" in s3.objects
     assert _status(s3)["token_usage"] is None
+
+
+def test_failure_while_setting_up_the_trace_still_reports(s3, monkeypatch):
+    # EventLog/uploader setup is inside the try: the finally still reports and cleans up
+    def broken(request_id):
+        raise OSError("disk full")
+    monkeypatch.setattr(runtime, "EventLog", broken)
+    with pytest.raises(OSError):
+        _run(monkeypatch, FakeGraph([TEXT]))
+    status = _status(s3)
+    assert status["status"] == "Failed" and "disk full" in status["error"] and status["trace_path"] == ""
+    assert "<cleanup>" in [k for k, _ in s3.history]
