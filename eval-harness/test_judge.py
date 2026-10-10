@@ -151,3 +151,41 @@ def test_calibration_agreement(tmp_path, scenario):
             w.writerow({"run_dir": str(run), "req:priority": status, "score:insight_depth": s})
     assert calibrate._spearman([1, 3, 4], [2, 3, 5]) == pytest.approx(1.0)
     calibrate.score(labels)  # prints; exercised for errors
+
+
+
+def test_judge_cache_is_keyed_by_prompt_and_requirements(tmp_path, scenario, monkeypatch):
+    """A changed rubric, prompt or scenario requirement must not reuse an old verdict."""
+    run = make_run.make_clean_run(tmp_path / "r")
+    reqs = scenario["requirements"]
+    client = FakeConverse([pointwise_reply(reqs)] * 3)
+    s = grade_run(run, scenario["csv"], scenario["answer_key"], scenario, (client, CFG))["scores"]
+    assert s["judge_version"].startswith(judge.PROMPT_VERSION + "|")
+    grade_run(run, scenario["csv"], scenario["answer_key"], scenario, (client, CFG))
+    assert len(client.requests) == 1                                    # unchanged → cached
+    changed = {**scenario, "requirements": reqs + [{"id": "extra", "text": "new requirement"}]}
+    grade_run(run, scenario["csv"], scenario["answer_key"], changed, (client, CFG))
+    assert len(client.requests) == 2                                    # requirements changed → judged again
+    monkeypatch.setattr(judge, "SYSTEM", judge.SYSTEM + " Be strict.")
+    grade_run(run, scenario["csv"], scenario["answer_key"], scenario, (client, CFG))
+    assert len(client.requests) == 3                                    # system prompt changed → judged again
+
+
+def test_judge_version_changes_with_rubric_and_model(scenario, monkeypatch):
+    v = judge.version(CFG, scenario["query"], scenario["requirements"])
+    assert judge.version({**CFG, "model": "other"}, scenario["query"], scenario["requirements"]) != v
+    monkeypatch.setattr(judge, "RUBRIC_TEXT", judge.RUBRIC_TEXT + "x")
+    assert judge.version(CFG, scenario["query"], scenario["requirements"]) != v
+
+
+def test_pairwise_cache_is_keyed_by_judge_version(tmp_path, scenario):
+    cand, base = make_run.make_clean_run(tmp_path / "t" / "c"), make_run.make_clean_run(tmp_path / "b" / "b")
+    (base / "artifacts" / "final_report_with_citations.docx").write_bytes((cand / "artifacts" / "final_report_with_citations.docx").read_bytes())
+    client = FakeConverse([pair_reply("A"), pair_reply("B")] * 2)
+    r = pairwise.judge_pair(client, CFG, scenario, cand, base, random.Random(0))
+    assert r["judge_version"] == judge.version(CFG, scenario["query"], scenario["requirements"])
+    pairwise.judge_pair(client, CFG, scenario, cand, base, random.Random(0))
+    assert len(client.requests) == 2                                    # cached
+    changed = {**scenario, "requirements": scenario["requirements"][:1]}
+    pairwise.judge_pair(client, CFG, changed, cand, base, random.Random(0))
+    assert len(client.requests) == 4                                    # requirements changed → judged again

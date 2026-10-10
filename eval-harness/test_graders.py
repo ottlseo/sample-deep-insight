@@ -176,6 +176,13 @@ def test_wrong_group_value_is_caught(clean, scenario):
     (18.55166312549055, 18.55166312549055, True),
     (16432923.0, 16431923.0, False),     # off by 1,000
     (18.7, 18.551663, False),
+    # rounded to 4, 6, 7 or 8 decimals: all the same value (6 and 7 used to fail)
+    (round(18.55166312549055, 4), 18.55166312549055, True),
+    (round(18.55166312549055, 6), 18.55166312549055, True),
+    (round(18.55166312549055, 7), 18.55166312549055, True),
+    (round(18.55166312549055, 8), 18.55166312549055, True),
+    (18.551664, 18.55166312549055, False),  # 6 decimals, last digit wrong
+    (18.551663125490547, 18.55166312549055, True),  # same value from another computation
 ])
 def test_same_value_respects_stored_precision(stored, expected, ok):
     assert recompute.same_value(stored, expected) is ok

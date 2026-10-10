@@ -161,7 +161,10 @@ verdict that flips with the order counts as a tie. Results show in
   `calibrate.py score` prints agreement per criterion (exact, ±1, Spearman,
   bias). Re-check whenever the rubric or judge model changes.
 - Judge results are cached (`judge.json`, `pairwise/`) by report hash and
-  judge model, so re-grading doesn't pay twice. A reply that breaks the schema
+  `judge_version`: `judge.PROMPT_VERSION`, a fingerprint of the system prompt,
+  rubric and prompt templates, the judge model and effort, and the scenario's
+  request and requirements. Changing any of them re-judges instead of reusing
+  an old verdict; unchanged re-grading doesn't pay twice. A reply that breaks the schema
   is recorded as `judge_error`, never as a score.
 
 ## Langfuse: browse, compare and label in a UI
@@ -304,12 +307,16 @@ One table per scenario:
   rate with a 95% Wilson interval: `67% [21–94%] (2/3)`.
 - **other metrics** show mean ± std (n).
 - **Δ** vs the first tag carries a 95% bootstrap interval, and ▲/▼ appears only
-  when that interval excludes 0. With 3 runs a side the intervals are wide on
-  purpose: 2/3 → 3/3 passing is not flagged, because it can be luck.
+  with **at least 5 runs a side** and an interval that excludes 0. With 3 runs
+  a bootstrap is too coarse to mean anything: a constant series resamples to
+  itself, so (0, 0, 0) vs (1, 1, 1) gets a zero-width interval. Below 5 runs
+  the delta and interval are printed without a flag; read them as a hint, and
+  use `--repeat 5` before calling a change.
 - **pass^k**: the chance that k runs in a row all pass, which says more about
   reliability than the average pass rate.
 - A ⚠ line appears when runs under one tag mix git SHAs, runtime versions or
-  model sets; split them before comparing.
+  model sets, or when the tags were graded by different fact-check or judge
+  versions; split or re-grade them before comparing.
 
 Also prints per-agent cost with the model each agent ran on.
 

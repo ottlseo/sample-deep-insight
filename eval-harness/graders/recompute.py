@@ -406,20 +406,19 @@ def _keys(key_text):
 
 
 def same_value(stored, expected):
-    """Stored equals expected rounded to the precision the stored value was written with.
+    """Stored equals expected, or expected rounded to the precision the stored value was written with.
 
-    19655.0 matches 19655.41 (stored as a whole number), 18.6 matches 18.5517
-    (one decimal), a full-precision float must match to ~1e-9, and 16,432,923
-    does not match 16,431,923.
+    19655.0 matches 19655.41 (stored as a whole number), 18.6 and 18.551663
+    match 18.55166312549055 (rounded to 1 and 6 decimals), a float from another
+    computation matches to ~1e-9, and 16,432,923 does not match 16,431,923.
     """
+    if abs(stored - expected) <= max(abs(expected) * 1e-9, 1e-9):
+        return True
     text = repr(float(stored))
-    if "e" in text or "." not in text:
-        decimals = 6
-    else:
-        decimals = 0 if text.endswith(".0") else len(text.split(".")[1])
-    if decimals >= 6:  # written at full precision: compare as floats
-        return abs(stored - expected) <= max(abs(expected) * 1e-9, 1e-9)
-    return abs(round(expected, decimals) - stored) <= max(abs(stored) * 1e-12, 1e-9)
+    if "e" in text:
+        return False
+    decimals = 0 if text.endswith(".0") else len(text.split(".")[1])
+    return abs(round(expected, decimals) - stored) <= max(abs(stored) * 1e-12, 1e-12)
 
 
 def grade(artifacts_dir, csv_path):

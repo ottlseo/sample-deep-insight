@@ -174,3 +174,27 @@ def test_compare_warns_when_evaluators_differ(tmp_path):
     same = _tag(tmp_path, "same", [{"facts_found": 12, "factcheck_version": "factcheck-v1|m|key=a"} for _ in range(2)])
     text = compare.table("moon_market_kr", [base, same], {t: [s for _, s in compare.load_runs(t)] for t in (base, same)})
     assert "evaluator versions" not in text
+
+
+
+def test_constant_series_with_three_runs_are_not_flagged(tmp_path):
+    """With n=3, (0,0,0) vs (1,1,1) bootstraps to a zero-width interval; that isn't evidence of a change."""
+    base = _tag(tmp_path, "base", [{"core_pass": False, "facts_found": 0} for _ in range(3)])
+    cand = _tag(tmp_path, "cand", [{"core_pass": True, "facts_found": 1} for _ in range(3)])
+    text = _table(tmp_path, [base, cand])
+    assert "▲" not in _row(text, "core pass rate") and "▲" not in _row(text, "answer-key facts correct")
+    assert "shown without ▲/▼" in text
+
+
+def test_constant_series_with_five_runs_are_flagged(tmp_path):
+    base = _tag(tmp_path, "base5", [{"facts_found": 0} for _ in range(5)])
+    cand = _tag(tmp_path, "cand5", [{"facts_found": 1} for _ in range(5)])
+    assert "▲ better" in _row(_table(tmp_path, [base, cand]), "answer-key facts correct")
+
+
+def test_mixed_judge_versions_are_flagged(tmp_path):
+    base = _tag(tmp_path, "b", [{"judge_score_mean": 3.5, "judge_version": "judge-v1|aaa"}] * 2)
+    cand = _tag(tmp_path, "c", [{"judge_score_mean": 3.0, "judge_version": "judge-v1|bbb"}] * 2)
+    assert "The LLM judge ran with 2 evaluator versions" in _table(tmp_path, [base, cand])
+    old = _tag(tmp_path, "o", [{"judge_score_mean": 3.0}] * 2)          # graded before versions existed
+    assert "unversioned (older cache)" in _table(tmp_path, [base, old])

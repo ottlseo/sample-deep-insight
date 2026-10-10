@@ -93,19 +93,21 @@ def artifacts_dir(run_dir):
 
 
 def run_judge(run_dir, adir, scenario, judge_ctx):
-    """Pointwise LLM judge, cached in judge.json by report hash and judge model."""
+    """Pointwise LLM judge, cached in judge.json by report hash and judge version."""
     import judge
     client, cfg = judge_ctx
     text = judge.report_text(adir, cfg["max_report_chars"])
     digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    ver = judge.version(cfg, scenario["query"], scenario["requirements"])
     cache = Path(run_dir) / "judge.json"
     if cache.is_file():
         prev = json.loads(cache.read_text(encoding="utf-8"))
-        if prev.get("report_sha256") == digest and prev.get("model") == cfg["model"] and prev.get("effort") == cfg.get("effort"):
+        if prev.get("report_sha256") == digest and prev.get("judge_version") == ver:
             return prev["metrics"]
     metrics, verdict, usage = judge.pointwise(client, cfg, scenario["query"], scenario["requirements"], text)
     metrics["judge_cost_usd"] = judge.judge_cost([usage])
-    cache.write_text(json.dumps({"model": cfg["model"], "effort": cfg.get("effort"), "report_sha256": digest,
+    metrics["judge_version"] = ver
+    cache.write_text(json.dumps({"model": cfg["model"], "effort": cfg.get("effort"), "judge_version": ver, "report_sha256": digest,
                                  "metrics": metrics, "verdict": verdict, "usage": usage}, indent=2, ensure_ascii=False), encoding="utf-8")
     return metrics
 

@@ -8,11 +8,13 @@ grade.py). Prints one markdown table per scenario:
   pass/fail metrics  rate with a 95% Wilson interval, e.g. 67% [21–94%] (2/3)
   other metrics      mean ± std (n)
   Δ                  difference vs the first tag with a 95% bootstrap interval;
-                     ▲/▼ only when that interval excludes 0
+                     ▲/▼ only with at least 5 runs a side and an interval that
+                     excludes 0
   pass^k             chance that k runs in a row all pass
 
-With about 3 runs per side the intervals are wide and say so: a 2/3 → 3/3
-change is not flagged. Runs under one tag that mix git SHAs, runtime versions
+With about 3 runs per side no delta is flagged: a bootstrap over 3 values is
+too coarse (a constant series resamples to itself and gives a zero-width
+interval), so 2/3 → 3/3 or even 0/3 → 3/3 is shown, not called a change. Runs under one tag that mix git SHAs, runtime versions
 or model sets are flagged too, since averaging across them compares nothing.
 """
 import argparse
@@ -153,14 +155,20 @@ def _fmt_d(d, kind, base_mean):
     return f"{d:+.1f}" if abs(d) < 100 else f"{d:+,.0f}"
 
 
+# Below this many runs a side, a bootstrap interval says little: with n = 3 a
+# constant series resamples to itself, so (0, 0, 0) vs (1, 1, 1) gets a
+# zero-width interval that "excludes 0". Deltas are still printed, unflagged.
+MIN_N_FOR_FLAGS = 5
+
+
 def delta(base, cand, kind, direction):
-    """Difference with its bootstrap interval; flagged only when the interval excludes 0."""
+    """Difference with its bootstrap interval; flagged only with enough runs and an interval excluding 0."""
     if base is None or cand is None:
         return "–", ""
     d = cand["mean"] - base["mean"]
     lo, hi = bootstrap_diff(base["vals"], cand["vals"])
     text = f"{_fmt_d(d, kind, base['mean'])} [{_fmt_d(lo, kind, base['mean'])}, {_fmt_d(hi, kind, base['mean'])}]"
-    clear = lo > 1e-12 or hi < -1e-12
+    clear = (lo > 1e-12 or hi < -1e-12) and min(base["n"], cand["n"]) >= MIN_N_FOR_FLAGS
     if direction == 0 or not clear:
         return text, ""
     return text, "▲ better" if d * direction > 0 else "▼ worse"
@@ -181,13 +189,24 @@ def config_warnings(tags, runs_by_tag):
     return out
 
 
+# (version key, a metric the evaluator always writes, name, rows it affects)
+EVALUATORS = [("factcheck_version", "factcheck_statements", "Fact check", "fact rows"),
+              ("judge_version", "judge_score_mean", "The LLM judge", "judge rows")]
+
+
 def evaluator_warnings(tags, runs_by_tag):
-    """Every run must be fact-checked by the same evaluator, or a delta may be the evaluator's."""
-    versions = {s.get("factcheck_version") for t in tags for s in runs_by_tag[t] if s.get("factcheck_version")}
-    if len(versions) < 2:
-        return []
-    return [f"> ⚠ Fact check ran with {len(versions)} evaluator versions ({'; '.join(sorted(versions))}). "
-            "Re-grade every tag with the current one (grade.py on the saved runs) before reading the fact rows."]
+    """Every run must be graded by the same evaluators, or a delta may be the evaluator's."""
+    out = []
+    runs = [s for t in tags for s in runs_by_tag[t]]
+    for key, marker, what, rows in EVALUATORS:
+        versions = {s[key] for s in runs if s.get(key)}
+        # graded before versions were recorded: can't be shown to match the others
+        unversioned = any(s.get(marker) is not None and not s.get(key) for s in runs)
+        if len(versions) + unversioned > 1:
+            listed = "; ".join(sorted(versions)) + ("; unversioned (older cache)" if unversioned else "")
+            out.append(f"> ⚠ {what} ran with {len(versions) + unversioned} evaluator versions ({listed}). "
+                       f"Re-grade every tag with the current one (grade.py on the saved runs) before reading the {rows}.")
+    return out
 
 
 def table(scenario, tags, runs_by_tag):
@@ -195,7 +214,8 @@ def table(scenario, tags, runs_by_tag):
     lines += config_warnings(tags, runs_by_tag) + evaluator_warnings(tags, runs_by_tag)
     ns = [len(runs_by_tag[t]) for t in tags]
     if min(ns) < 5:
-        lines.append(f"> Fewer than 5 runs on a side (n = {', '.join(map(str, ns))}): intervals are wide, and small changes won't be flagged.")
+        lines.append(f"> Fewer than {MIN_N_FOR_FLAGS} runs on a side (n = {', '.join(map(str, ns))}): deltas are shown without ▲/▼. "
+                     "With this few runs a bootstrap interval can be zero-width and isn't evidence of a change.")
     if lines[-1] != "":
         lines.append("")
     header = ["metric"] + [Path(t).name for t in tags] + [f"Δ {Path(t).name}" for t in tags[1:]]

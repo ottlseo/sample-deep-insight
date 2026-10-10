@@ -64,7 +64,8 @@ def judge_pair(client, cfg, scenario, cand_dir, base_dir, rng):
     if cand_text is None:
         return {"overall": "baseline", "position_consistent": True, "criteria": {k: "baseline" for k in judge.CRITERIA},
                 "note": "candidate produced no report", "cost_usd": 0.0}
-    key = hashlib.sha256((cand_text + "\0" + base_text + "\0" + cfg["model"] + "\0" + str(cfg.get("effort"))).encode()).hexdigest()
+    ver = judge.version(cfg, scenario["query"], scenario["requirements"])
+    key = hashlib.sha256((cand_text + "\0" + base_text + "\0" + ver).encode()).hexdigest()
     cache = cand_dir / "pairwise" / f"{base_dir.parent.name}__{base_dir.name}.json"
     if cache.is_file():
         prev = json.loads(cache.read_text(encoding="utf-8"))
@@ -73,7 +74,8 @@ def judge_pair(client, cfg, scenario, cand_dir, base_dir, rng):
     result, rounds, usages = judge.pairwise(client, cfg, scenario["query"], scenario["requirements"], cand_text, base_text, rng)
     result["cost_usd"] = judge.judge_cost(usages)
     cache.parent.mkdir(exist_ok=True)
-    cache.write_text(json.dumps({"key": key, "model": cfg["model"], "baseline_run": str(base_dir), "result": result,
+    result["judge_version"] = ver
+    cache.write_text(json.dumps({"key": key, "model": cfg["model"], "judge_version": ver, "baseline_run": str(base_dir), "result": result,
                                  "rounds": rounds, "usage": usages}, indent=2, ensure_ascii=False), encoding="utf-8")
     return result
 

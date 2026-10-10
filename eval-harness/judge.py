@@ -31,6 +31,11 @@ from pydantic import BaseModel, Field
 
 HERE = Path(__file__).resolve().parent
 
+# Bump when the judging approach changes. version() also fingerprints the
+# system prompt, rubric and prompt templates, so an edit there invalidates
+# cached verdicts even if this isn't bumped.
+PROMPT_VERSION = "judge-v1"
+
 import cost  # noqa: E402
 from graders.report import read_docx  # noqa: E402
 
@@ -185,6 +190,22 @@ def _call(client, cfg, prompt, schema, system=SYSTEM):
         "cache_write": u.get("cacheWriteInputTokens", 0),
     }
     return verdict, usage
+
+
+def version(cfg, query=None, requirements=None):
+    """What decides a verdict besides the report(s): same version, comparable scores.
+
+    pointwise and pairwise pass the scenario's request and requirements, so
+    editing scenarios.yaml invalidates their cached verdicts too.
+    """
+    import hashlib
+    import inspect
+    prompt = SYSTEM + RUBRIC_TEXT + inspect.getsource(pointwise) + inspect.getsource(_pairwise_prompt) + inspect.getsource(combine_pairwise)
+    parts = [PROMPT_VERSION, hashlib.sha256(prompt.encode()).hexdigest()[:10], cfg["model"], f"effort={cfg.get('effort')}"]
+    if query is not None:
+        task = (query or "").strip() + json.dumps(requirements or [], ensure_ascii=False, sort_keys=True)
+        parts.append("task=" + hashlib.sha256(task.encode()).hexdigest()[:10])
+    return "|".join(parts)
 
 
 def judge_cost(usages):
